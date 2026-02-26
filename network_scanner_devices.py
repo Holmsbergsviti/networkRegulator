@@ -172,49 +172,21 @@ class WifiNetworksUI(tk.Tk):
         pass
 
     def on_double_click(self, _event=None):
-        """
-        sel = self.tree.selection()
-        if not sel:
-            return
-        
-        vals = self.tree.item(sel[0], "values")
-        # columns: ESSID, PWR, CH, Band, Privacy, Cipher, Auth, BSSID, ...
-        ch = vals[2]
-        bssid = vals[7]
-
-        # choose a filename prefix (you can customize)
-        file_name = f"capture_{bssid.replace(':','')}_ch{ch}"
-
-        subprocess.Popen([
-            "python3",
-            "network_devices.py",
-            bssid,
-            ch,
-            file_name,
-            MON_INTERFACE
-        ])
-        """
-
-        """
         sel = self.tree.selection()
         if not sel:
             return
 
-        vals = self.tree.item(sel[0], "values")
-        # columns: ESSID, PWR, CH, Band, Privacy, Cipher, Auth, BSSID, ...
-        ch = vals[2]
-        bssid = vals[7]
+        values = self.tree.item(sel[0], "values")
+        if len(values) < 2:
+            return
 
-        # choose a filename prefix (you can customize)
-        file_name = f"capture_{bssid.replace(':','')}_ch{ch}"
-
-        cmd = f"sudo airodump-ng -d {bssid} -c {ch} -w {file_name} {MON_INTERFACE}"
-
-        # Copy to clipboard
+        bssid = values[1]
+        stationMAC = values[0]
+        subprocess.run(["sudo", "aireplay-ng", "-0", "10", "-a", bssid, "-c", stationMAC, MON_INTERFACE])
+        cmd = f"sudo aireplay-ng --deauth 10 -a {bssid} -c {stationMAC} {MON_INTERFACE}"
         self.clipboard_clear()
         self.clipboard_append(cmd)
         self.set_status("Copied command to clipboard (paste in terminal).")
-        """
 
     def set_status(self, msg: str):
         self.status_var.set(msg)

@@ -5,6 +5,7 @@ import subprocess
 import threading
 import tkinter as tk
 from tkinter import ttk, messagebox
+import re
 
 # --------- SETTINGS ----------
 INTERFACE = "wlp0s20f3"
@@ -12,6 +13,9 @@ MON_INTERFACE = INTERFACE + "mon"
 
 CAPTURE_PREFIX = "network_scan"       
 CAPTURE_CSV = f"{CAPTURE_PREFIX}-01.csv"
+
+CAPTURE_PREFIX_5G = "network_scan_5g"
+CAPTURE_CSV_5G = f"{CAPTURE_PREFIX_5G}-01.csv"
 
 REFRESH_MS = 1500                # table refresh interval
 
@@ -118,6 +122,102 @@ def parse_airodump_csv(path: str):
     networks.sort(key=pwr_key, reverse=True)
     return networks
 
+def parse_nmcli_wifi():
+    """
+    Parse nmcli -t -m multiline output where APs are separated by repeating BSSID: lines
+    (your output has no blank lines).
+    """
+    try:
+        cmd = ["nmcli", "-t", "-m", "multiline",
+            "-f", "BSSID,SSID,CHAN,SIGNAL,SECURITY",
+            "dev", "wifi", "list"]
+
+        if os.geteuid() == 0 and os.environ.get("SUDO_USER"):
+            user = os.environ["SUDO_USER"]
+            uid = subprocess.check_output(["id", "-u", user], text=True).strip()
+
+            cmd = [
+                "sudo", "-u", user,
+                "env",
+                f"XDG_RUNTIME_DIR=/run/user/{uid}",
+                "DBUS_SYSTEM_BUS_ADDRESS=unix:path=/run/dbus/system_bus_socket",
+                *cmd
+            ]
+
+        r = subprocess.run(cmd, capture_output=True, text=True, check=False)
+        if r.returncode != 0:
+            return []
+        lines = [ln.strip() for ln in r.stdout.splitlines() if ln.strip()]
+    except Exception:
+        return []
+
+    def channel_to_band(ch_str: str) -> str:
+        try:
+            ch = int(ch_str)
+        except Exception:
+            return "?"
+        return "2.4" if 1 <= ch <= 14 else ("5" if ch >= 36 else "?")
+
+    out = []
+    cur = {}
+
+    def flush():
+        nonlocal cur
+        bssid = cur.get("BSSID", "")
+        if len(bssid.split(":")) != 6:
+            cur = {}
+            return
+
+        ssid = cur.get("SSID", "")
+        chan = cur.get("CHAN", "")
+        signal = cur.get("SIGNAL", "")
+        security = cur.get("SECURITY", "")
+
+        try:
+            sig = int(signal)         # 0..100
+            pwr = str(-100 + sig)     # map to -100..0 (bigger = stronger)
+        except Exception:
+            pwr = "-999"
+
+        out.append({
+            "BSSID": bssid,
+            "CH": chan,
+            "Band": channel_to_band(chan),
+            "PWR": pwr,
+            "Privacy": security,
+            "Cipher": "",
+            "Auth": "",
+            "Beacons": "",
+            "IV": "",
+            "ESSID": ssid,
+        })
+        cur = {}
+
+    for ln in lines:
+        if ":" not in ln:
+            continue
+        k, v = ln.split(":", 1)
+        k = k.strip()
+        v = v.strip()
+
+        if k == "BSSID":
+            if cur:
+                flush()
+            cur["BSSID"] = v
+        else:
+            cur[k] = v
+
+    if cur:
+        flush()
+
+    def pwr_key(n):
+        try:
+            return int(n["PWR"])
+        except Exception:
+            return -999
+
+    out.sort(key=pwr_key, reverse=True)
+    return out
 
 class WifiNetworksUI(tk.Tk):
     def __init__(self):
@@ -270,7 +370,8 @@ class WifiNetworksUI(tk.Tk):
             # 3) Start airodump writing CSV
             self.after(0, self.set_status, "airodump-ng running (writing CSV)...")
             self.proc = subprocess.Popen(
-                ["sudo", "airodump-ng", MON_INTERFACE, "-w", CAPTURE_PREFIX, "--output-format", "csv"],
+                #["sudo", "airodump-ng", MON_INTERFACE, "-w", CAPTURE_PREFIX, "--output-format", "csv"],
+                ["sudo", "airodump-ng", "--band", "abg", MON_INTERFACE, "-w", CAPTURE_PREFIX, "--output-format", "csv"],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             )
@@ -306,7 +407,26 @@ class WifiNetworksUI(tk.Tk):
     def refresh_table(self):
         # Update table periodically while scanning
         if self.scanning:
-            nets = parse_airodump_csv(CAPTURE_CSV)
+            nets_airdump = parse_airodump_csv(CAPTURE_CSV)
+            nets_nmcli = parse_nmcli_wifi()
+
+            # Merge + deduplicate by BSSID (prefer airodump row if present)
+            merged = {}
+            for n in nets_nmcli:
+                merged[n["BSSID"]] = n
+            for n in nets_airdump:
+                merged[n["BSSID"]] = n
+
+            nets = list(merged.values())
+
+            # Re-sort after merge
+            def pwr_key(n):
+                try:
+                    return int(n["PWR"])
+                except Exception:
+                    return -999
+
+            nets.sort(key=pwr_key, reverse=True)
 
             # Preserve selection BSSID if user clicked a row
             selected = None
@@ -314,7 +434,7 @@ class WifiNetworksUI(tk.Tk):
             if sel:
                 selected_vals = self.tree.item(sel[0], "values")
                 if len(selected_vals) >= 7:
-                    selected = selected_vals[6]  # BSSID column
+                    selected = selected_vals[7]  # BSSID column
 
             self.clear_table()
 
@@ -340,7 +460,9 @@ class WifiNetworksUI(tk.Tk):
                 if best_count >= 200:  # avoid huge UI lag
                     break
 
-            self.set_status(f"Scanning... Networks found: {len(nets)} (showing up to 200)")
+            self.set_status(
+                f"Scanning... airodump={len(nets_airdump)} nmcli={len(nets_nmcli)} merged={len(nets)} (showing up to 200)"
+            )
 
         self.after(REFRESH_MS, self.refresh_table)
 
