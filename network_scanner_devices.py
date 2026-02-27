@@ -179,8 +179,8 @@ class WifiNetworksUI(tk.Tk):
             return
 
         bssid = values[1]
-        subprocess.run(["sudo", "aireplay-ng", "-0", "10", "-a", bssid, MON_INTERFACE])
-        print("sudo aireplay-ng --deauth 10 -a " + bssid + " " + MON_INTERFACE)
+        subprocess.run(["sudo", "aireplay-ng", "-0", "1", "-a", bssid, MON_INTERFACE])
+        print("sudo aireplay-ng --deauth 1 -a " + bssid + " " + MON_INTERFACE)
 
     def on_double_click(self, _event=None):
         sel = self.tree.selection()
