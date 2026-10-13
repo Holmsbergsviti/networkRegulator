@@ -254,8 +254,12 @@ class MacBackend(Backend):
     @staticmethod
     def _net_from_sp(net: dict, connected: bool, connected_ssid: str = "") -> dict:
         essid = net.get("_name", "")
-        if connected and connected_ssid:
-            essid = connected_ssid
+        if connected:
+            # macOS 26 redacts SSIDs without Location Services and newer builds
+            # broke `networksetup -getairportnetwork`, so the name may be
+            # unavailable. Still mark the network you're actually on so it's
+            # obvious which row is yours.
+            essid = (connected_ssid or essid or "<hidden by macOS>") + "  (connected)"
         ch_raw = str(net.get("spairport_network_channel", ""))
         m = re.match(r"\s*(\d+)", ch_raw)
         ch = m.group(1) if m else ""
