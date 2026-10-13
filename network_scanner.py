@@ -20,6 +20,10 @@ class WifiNetworksUI(tk.Tk):
     def __init__(self):
         super().__init__()
         self.backend = get_backend()
+        try:
+            self.backend.prepare()
+        except Exception:
+            pass
         self.caps = self.backend.capabilities()
 
         self.title(f"NetworkRegulator -- Wi-Fi Networks ({self.backend.name})")

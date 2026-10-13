@@ -80,6 +80,10 @@ class Capabilities:
 class Backend:
     name = "base"
 
+    def prepare(self):
+        """Called once at GUI startup for any one-time setup (e.g. permissions)."""
+        pass
+
     def capabilities(self) -> Capabilities:
         return Capabilities()
 
@@ -137,6 +141,16 @@ class MacBackend(Backend):
 
         self._has_aircrack = bool(shutil.which("airodump-ng") and shutil.which("aireplay-ng"))
 
+    # ---- one-time setup --------------------------------------------------- #
+    def prepare(self):
+        """Request Location Services so CoreWLAN can return real SSIDs.
+        Only meaningful when running from the packaged .app; harmless otherwise."""
+        try:
+            import mac_native
+            threading.Thread(target=mac_native.request_location, daemon=True).start()
+        except Exception:
+            pass
+
     # ---- capabilities ----------------------------------------------------- #
     def capabilities(self) -> Capabilities:
         mon = os.environ.get("NETREG_MON_IFACE", "")
@@ -191,6 +205,36 @@ class MacBackend(Backend):
                 time.sleep(0.1)
 
     def _scan_once(self) -> tuple[list[dict], str]:
+        # Prefer CoreWLAN (real names when Location is granted); fall back to
+        # system_profiler, which redacts names on recent macOS.
+        cw = self._scan_corewlan()
+        if cw is not None:
+            return cw
+        return self._scan_system_profiler()
+
+    def _scan_corewlan(self):
+        try:
+            import mac_native
+            nets = mac_native.scan_networks()
+        except Exception:
+            nets = None
+        if not nets:
+            return None
+        rows = []
+        for n in nets:
+            essid = n["ESSID"] + ("  (connected)" if n.get("connected") else "")
+            rows.append(_empty_net(ESSID=essid, CH=n.get("CH", ""),
+                                   Band=n.get("Band", "?"), PWR=n.get("PWR", ""),
+                                   BSSID=n.get("BSSID", "")))
+        best: dict[str, dict] = {}
+        for r in rows:
+            prev = best.get(r["ESSID"])
+            if prev is None or _pwr(r) > _pwr(prev):
+                best[r["ESSID"]] = r
+        out = sorted(best.values(), key=_pwr, reverse=True)
+        return out, f"Found {len(out)} network(s) via CoreWLAN (real names)."
+
+    def _scan_system_profiler(self) -> tuple[list[dict], str]:
         import json
         try:
             r = subprocess.run(
@@ -238,7 +282,15 @@ class MacBackend(Backend):
         return out, note
 
     def _connected_ssid(self) -> str:
-        """Real SSID of the network we're on, without needing Location Services."""
+        """Real SSID of the network we're on. Tries CoreWLAN (works in the
+        packaged app with Location granted), then the legacy networksetup."""
+        try:
+            import mac_native
+            ssid = mac_native.connected_ssid()
+            if ssid:
+                return ssid
+        except Exception:
+            pass
         try:
             r = subprocess.run(
                 ["networksetup", "-getairportnetwork", self._default_iface()],
