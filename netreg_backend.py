@@ -139,19 +139,25 @@ class MacBackend(Backend):
 
     # ---- capabilities ----------------------------------------------------- #
     def capabilities(self) -> Capabilities:
-        if self._has_aircrack:
+        mon = os.environ.get("NETREG_MON_IFACE", "")
+        can_deauth = bool(self._has_aircrack and mon)
+        if can_deauth:
             deauth_note = (
-                "aircrack-ng found. Deauth needs an adapter in monitor mode that "
-                "supports injection (the built-in Mac card cannot inject)."
+                f"Deauth will use monitor interface '{mon}' — make sure that "
+                f"adapter is in monitor mode."
             )
-            can_deauth = True
+        elif self._has_aircrack:
+            deauth_note = (
+                "aircrack-ng is installed, but disconnecting still needs a "
+                "monitor-mode USB adapter (the built-in Mac card cannot inject). "
+                "Put it in monitor mode and set NETREG_MON_IFACE to that interface."
+            )
         else:
             deauth_note = (
                 "Disconnecting a device needs the aircrack-ng suite plus a "
                 "monitor-mode-capable USB Wi-Fi adapter. Install aircrack-ng "
                 "(brew install aircrack-ng) and plug in a compatible adapter."
             )
-            can_deauth = False
         return Capabilities(
             can_scan=True,
             can_list_devices=True,
@@ -197,33 +203,59 @@ class MacBackend(Backend):
         except Exception as e:
             return [], f"Scan error: {e}"
 
+        connected_ssid = self._connected_ssid()
         rows: list[dict] = []
         try:
             for blk in data.get("SPAirPortDataType", []):
                 for iface in blk.get("spairport_airport_interfaces", []):
                     cur = iface.get("spairport_current_network_information")
                     if isinstance(cur, dict):
-                        rows.append(self._net_from_sp(cur, connected=True))
+                        rows.append(self._net_from_sp(cur, connected=True,
+                                                      connected_ssid=connected_ssid))
                     for net in iface.get("spairport_airport_other_local_wireless_networks", []) or []:
                         rows.append(self._net_from_sp(net, connected=False))
         except Exception as e:
             return rows, f"Parsed partially: {e}"
 
+        # drop entries with no usable name (macOS sometimes returns blank rows)
+        rows = [r for r in rows if r["ESSID"]]
+
         # de-dupe by ESSID keeping strongest
         best: dict[str, dict] = {}
         for n in rows:
-            key = n["ESSID"] or n["BSSID"]
+            key = n["ESSID"]
             prev = best.get(key)
             if prev is None or _pwr(n) > _pwr(prev):
                 best[key] = n
         out = sorted(best.values(), key=_pwr, reverse=True)
-        note = (f"Found {len(out)} network(s). Note: macOS does not expose other "
-                f"networks' BSSIDs, so that column may be blank.")
+        redacted = any(r["ESSID"] == "<redacted>" for r in out)
+        note = f"Found {len(out)} network(s)."
+        if redacted:
+            note += (" Some names show <redacted> — grant Location Services to see "
+                     "them. macOS hides other networks' BSSIDs regardless.")
+        else:
+            note += " macOS does not expose other networks' BSSIDs."
         return out, note
 
+    def _connected_ssid(self) -> str:
+        """Real SSID of the network we're on, without needing Location Services."""
+        try:
+            r = subprocess.run(
+                ["networksetup", "-getairportnetwork", self._default_iface()],
+                capture_output=True, text=True, timeout=5,
+            )
+            m = re.search(r"Current Wi-Fi Network:\s*(.+)", r.stdout)
+            if m:
+                return m.group(1).strip()
+        except Exception:
+            pass
+        return ""
+
     @staticmethod
-    def _net_from_sp(net: dict, connected: bool) -> dict:
+    def _net_from_sp(net: dict, connected: bool, connected_ssid: str = "") -> dict:
         essid = net.get("_name", "")
+        if connected and connected_ssid:
+            essid = connected_ssid
         ch_raw = str(net.get("spairport_network_channel", ""))
         m = re.match(r"\s*(\d+)", ch_raw)
         ch = m.group(1) if m else ""
@@ -242,7 +274,7 @@ class MacBackend(Backend):
         sec = str(net.get("spairport_security_mode", ""))
         sec = sec.replace("spairport_security_mode_", "").replace("_", " ").strip() or ""
         return _empty_net(ESSID=essid, CH=ch, Band=band, PWR=pwr, Privacy=sec,
-                          BSSID="(connected)" if connected and not net.get("bssid") else net.get("bssid", ""))
+                          BSSID=net.get("bssid", ""))
 
     def snapshot_networks(self) -> tuple[list[dict], str]:
         with self._lock:
