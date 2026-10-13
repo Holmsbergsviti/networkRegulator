@@ -1,258 +1,48 @@
-import os
-import time
-import csv
+"""
+network_scanner.py -- main window: scan Wi-Fi networks.
+
+All OS-specific logic now lives in netreg_backend. This file is just the GUI:
+it asks the active backend to scan and polls it for results. Double-clicking a
+network opens the devices window for that network.
+"""
 import subprocess
+import sys
 import threading
 import tkinter as tk
 from tkinter import ttk, messagebox
-import re
 
-# --------- SETTINGS ----------
-INTERFACE = "wlp0s20f3"
-MON_INTERFACE = INTERFACE + "mon"
+from netreg_backend import NETWORK_COLUMNS, get_backend
 
-CAPTURE_PREFIX = "network_scan"       
-CAPTURE_CSV = f"{CAPTURE_PREFIX}-01.csv"
+REFRESH_MS = 1500
 
-CAPTURE_PREFIX_5G = "network_scan_5g"
-CAPTURE_CSV_5G = f"{CAPTURE_PREFIX_5G}-01.csv"
-
-REFRESH_MS = 1500                # table refresh interval
-
-RECOVERY_SCRIPT = "recovery.py"  # your file in same folder
-# -----------------------------
-
-
-def run_quiet(cmd: list[str]) -> int:
-    """Run command without spamming UI; return exit code."""
-    try:
-        r = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        return r.returncode
-    except Exception:
-        return 1
-
-
-def interface_exists(name: str) -> bool:
-    try:
-        # more reliable than string search in "ip a"
-        r = subprocess.run(["ip", "link", "show", name], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        return r.returncode == 0
-    except Exception:
-        return False
-
-
-def parse_airodump_csv(path: str):
-    """
-    Parse airodump CSV and return list of dicts (networks).
-    Only parses the first section (APs) until the 'Station MAC' section begins.
-    """
-    if not os.path.exists(path):
-        return []
-
-    networks = []
-    try:
-        with open(path, newline="", encoding="utf-8", errors="ignore") as f:
-            reader = csv.reader(f)
-            in_ap_section = True
-
-            for row in reader:
-                if not row:
-                    continue
-
-                # When station section starts, stop reading AP section
-                if row[0].strip() == "Station MAC":
-                    in_ap_section = False
-
-                if not in_ap_section:
-                    break
-
-                # Skip headers
-                if row[0].strip() == "BSSID":
-                    continue
-
-                # AP rows have at least ESSID at index 13 in standard airodump CSV
-                if len(row) < 14:
-                    continue
-
-                bssid = row[0].strip()
-                channel = row[3].strip()
-                privacy = row[5].strip()
-                cipher_ = row[6].strip()
-                auth = row[7].strip()
-                power = row[8].strip()
-                beacons = row[9].strip()
-                iv = row[10].strip()
-                essid = row[13].strip()
-
-                def channel_to_band(ch_str: str) -> str:
-                    try:
-                        ch = int(ch_str)
-                    except Exception:
-                        return "?"
-                    # 1–14 usually 2.4 GHz; 36+ usually 5 GHz (simplified)
-                    return "2.4" if 1 <= ch <= 14 else ("5" if ch >= 36 else "?")
-
-                # Basic sanity: BSSID looks like MAC
-                if len(bssid.split(":")) != 6:
-                    continue
-
-                networks.append({
-                    "BSSID": bssid,
-                    "CH": channel,
-                    "Band": channel_to_band(channel),
-                    "PWR": power,
-                    "Privacy": privacy,
-                    "Cipher": cipher_,
-                    "Auth": auth,
-                    "Beacons": beacons,
-                    "IV": iv,
-                    "ESSID": essid,
-                })
-
-    except Exception:
-        return []
-
-    # Sort: strongest signal (PWR is usually negative; -30 stronger than -90)
-    def pwr_key(n):
-        try:
-            return int(n["PWR"])
-        except Exception:
-            return -999
-
-    networks.sort(key=pwr_key, reverse=True)
-    return networks
-
-def parse_nmcli_wifi():
-    """
-    Parse nmcli -t -m multiline output where APs are separated by repeating BSSID: lines
-    (your output has no blank lines).
-    """
-    try:
-        cmd = ["nmcli", "-t", "-m", "multiline",
-            "-f", "BSSID,SSID,CHAN,SIGNAL,SECURITY",
-            "dev", "wifi", "list"]
-
-        if os.geteuid() == 0 and os.environ.get("SUDO_USER"):
-            user = os.environ["SUDO_USER"]
-            uid = subprocess.check_output(["id", "-u", user], text=True).strip()
-
-            cmd = [
-                "sudo", "-u", user,
-                "env",
-                f"XDG_RUNTIME_DIR=/run/user/{uid}",
-                "DBUS_SYSTEM_BUS_ADDRESS=unix:path=/run/dbus/system_bus_socket",
-                *cmd
-            ]
-
-        r = subprocess.run(cmd, capture_output=True, text=True, check=False)
-        if r.returncode != 0:
-            return []
-        lines = [ln.strip() for ln in r.stdout.splitlines() if ln.strip()]
-    except Exception:
-        return []
-
-    def channel_to_band(ch_str: str) -> str:
-        try:
-            ch = int(ch_str)
-        except Exception:
-            return "?"
-        return "2.4" if 1 <= ch <= 14 else ("5" if ch >= 36 else "?")
-
-    out = []
-    cur = {}
-
-    def flush():
-        nonlocal cur
-        bssid = cur.get("BSSID", "")
-        if len(bssid.split(":")) != 6:
-            cur = {}
-            return
-
-        ssid = cur.get("SSID", "")
-        chan = cur.get("CHAN", "")
-        signal = cur.get("SIGNAL", "")
-        security = cur.get("SECURITY", "")
-
-        try:
-            sig = int(signal)         # 0..100
-            pwr = str(-100 + sig)     # map to -100..0 (bigger = stronger)
-        except Exception:
-            pwr = "-999"
-
-        out.append({
-            "BSSID": bssid,
-            "CH": chan,
-            "Band": channel_to_band(chan),
-            "PWR": pwr,
-            "Privacy": security,
-            "Cipher": "",
-            "Auth": "",
-            "Beacons": "",
-            "IV": "",
-            "ESSID": ssid,
-        })
-        cur = {}
-
-    for ln in lines:
-        if ":" not in ln:
-            continue
-        k, v = ln.split(":", 1)
-        k = k.strip()
-        v = v.strip()
-
-        if k == "BSSID":
-            if cur:
-                flush()
-            cur["BSSID"] = v
-        else:
-            cur[k] = v
-
-    if cur:
-        flush()
-
-    def pwr_key(n):
-        try:
-            return int(n["PWR"])
-        except Exception:
-            return -999
-
-    out.sort(key=pwr_key, reverse=True)
-    return out
 
 class WifiNetworksUI(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("Wi-Fi Networks Scanner")
-        self.geometry("1100x650")
+        self.backend = get_backend()
+        self.caps = self.backend.capabilities()
 
-        self.proc = None
-        self.worker = None
+        self.title(f"NetworkRegulator -- Wi-Fi Networks ({self.backend.name})")
+        self.geometry("1100x650")
         self.scanning = False
 
-        # Top controls
         top = ttk.Frame(self)
         top.pack(fill="x", padx=10, pady=10)
 
-        self.status_var = tk.StringVar(value="Ready.")
+        self.status_var = tk.StringVar(value=self.caps.scan_note or "Ready.")
         ttk.Label(top, textvariable=self.status_var).pack(side="left")
 
         self.start_btn = ttk.Button(top, text="Start Scan", command=self.start_scan)
         self.start_btn.pack(side="right")
-
         self.stop_btn = ttk.Button(top, text="Stop", command=self.stop_scan, state="disabled")
         self.stop_btn.pack(side="right", padx=8)
-
-        self.recover_btn = ttk.Button(top, text="Run Recovery", command=self.run_recovery)
+        self.recover_btn = ttk.Button(top, text="Restore Wi-Fi", command=self.run_recovery)
         self.recover_btn.pack(side="right", padx=8)
 
-        # Table
-        columns = ("ESSID", "PWR", "CH", "Band", "Privacy", "Cipher", "Auth", "BSSID", "Beacons", "IV")
-        self.tree = ttk.Treeview(self, columns=columns, show="headings", height=22)
+        self.tree = ttk.Treeview(self, columns=NETWORK_COLUMNS, show="headings", height=22)
         self.tree.pack(fill="both", expand=True, padx=10, pady=(0, 10))
-
-        for col in columns:
+        for col in NETWORK_COLUMNS:
             self.tree.heading(col, text=col)
-            # column widths
             if col == "ESSID":
                 self.tree.column(col, width=260, anchor="w")
             elif col == "BSSID":
@@ -263,67 +53,17 @@ class WifiNetworksUI(tk.Tk):
                 self.tree.column(col, width=70, anchor="center")
             else:
                 self.tree.column(col, width=80, anchor="center")
-
         self.tree.bind("<Double-1>", self.on_double_click)
 
-        # Bottom help
-        note = (
-            "Tip: Run this UI with sudo so it doesn't block on password prompts:\n"
-            "  sudo python3 wifi_networks_table_ui.py\n"
-            "The table updates from network_scan-01.csv while airodump runs."
-        )
+        note = (f"Double-click a network to see its devices.  "
+                f"Deauth on this machine: "
+                f"{'available' if self.caps.can_deauth else 'unavailable'}.")
         ttk.Label(self, text=note, foreground="gray").pack(fill="x", padx=10, pady=(0, 10))
 
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
         self.after(REFRESH_MS, self.refresh_table)
 
-    def on_double_click(self, _event=None):
-        #"""
-        sel = self.tree.selection()
-        if not sel:
-            return
-        
-        vals = self.tree.item(sel[0], "values")
-        # columns: ESSID, PWR, CH, Band, Privacy, Cipher, Auth, BSSID, ...
-        essid = vals[0]
-        ch = vals[2]
-        bssid = vals[7]
-
-        # choose a filename prefix (you can customize)
-        file_name = f"capture_{bssid.replace(':','')}_ch{ch}"
-
-        subprocess.Popen([
-            "python3",
-            "network_scanner_devices.py",
-            essid,
-            bssid,
-            ch,
-            file_name,
-            MON_INTERFACE
-        ])
-        #"""
-
-        """
-        sel = self.tree.selection()
-        if not sel:
-            return
-
-        vals = self.tree.item(sel[0], "values")
-        # columns: ESSID, PWR, CH, Band, Privacy, Cipher, Auth, BSSID, ...
-        ch = vals[2]
-        bssid = vals[7]
-
-        # choose a filename prefix (you can customize)
-        file_name = f"capture_{bssid.replace(':','')}_ch{ch}"
-
-        cmd = f"sudo airodump-ng -d {bssid} -c {ch} -w {file_name} {MON_INTERFACE}"
-
-        # Copy to clipboard
-        self.clipboard_clear()
-        self.clipboard_append(cmd)
-        self.set_status("Copied command to clipboard (paste in terminal).")
-        #"""
-
-    def set_status(self, msg: str):
+    def set_status(self, msg):
         self.status_var.set(msg)
 
     def clear_table(self):
@@ -331,164 +71,70 @@ class WifiNetworksUI(tk.Tk):
             self.tree.delete(item)
 
     def start_scan(self):
-        if self.worker and self.worker.is_alive():
-            messagebox.showinfo("Running", "Scan is already running.")
+        if not self.caps.can_scan:
+            messagebox.showinfo("Not available", self.caps.scan_note)
             return
-
-        if not interface_exists(INTERFACE):
-            messagebox.showerror("Interface not found", f"Interface does not exist: {INTERFACE}")
-            return
-
-        self.clear_table()
-        self.set_status("Starting monitor mode + capture...")
+        self.set_status("Starting scan...")
         self.start_btn.config(state="disabled")
         self.stop_btn.config(state="normal")
         self.scanning = True
-
-        self.worker = threading.Thread(target=self._scan_worker, daemon=True)
-        self.worker.start()
-
-    def _scan_worker(self):
-        try:
-            # Clean old captures (optional)
-            for suffix in ("-01.csv", "-01.kismet.csv", "-01.kismet.netxml", "-01.cap"):
-                p = CAPTURE_PREFIX + suffix
-                if os.path.exists(p):
-                    try:
-                        os.remove(p)
-                    except Exception:
-                        pass
-
-            # 1) Kill processes that interfere
-            self.after(0, self.set_status, "airmon-ng check kill ...")
-            run_quiet(["sudo", "airmon-ng", "check", "kill"])
-
-            # 2) Start monitor mode
-            self.after(0, self.set_status, f"airmon-ng start {INTERFACE} ...")
-            run_quiet(["sudo", "airmon-ng", "start", INTERFACE])
-
-            # 3) Start airodump writing CSV
-            self.after(0, self.set_status, "airodump-ng running (writing CSV)...")
-            self.proc = subprocess.Popen(
-                #["sudo", "airodump-ng", MON_INTERFACE, "-w", CAPTURE_PREFIX, "--output-format", "csv"],
-                ["sudo", "airodump-ng", "--band", "abg", MON_INTERFACE, "-w", CAPTURE_PREFIX, "--output-format", "csv"],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-
-            # Keep thread alive while scanning
-            while self.scanning and self.proc and self.proc.poll() is None:
-                time.sleep(0.3)
-
-        except Exception as e:
-            self.after(0, messagebox.showerror, "Error", str(e))
-        finally:
-            self.after(0, self._scan_finished_ui)
-
-    def _scan_finished_ui(self):
-        self.start_btn.config(state="normal")
-        self.stop_btn.config(state="disabled")
-        if self.scanning:
-            self.set_status("Stopped.")
-        else:
-            self.set_status("Ready.")
-        self.scanning = False
+        threading.Thread(target=self.backend.start_scan, daemon=True).start()
 
     def stop_scan(self):
         self.scanning = False
         self.set_status("Stopping...")
-        if self.proc and self.proc.poll() is None:
-            try:
-                self.proc.terminate()
-            except Exception:
-                pass
-        self.proc = None
+        threading.Thread(target=self.backend.stop_scan, daemon=True).start()
+        self.start_btn.config(state="normal")
+        self.stop_btn.config(state="disabled")
 
     def refresh_table(self):
-        # Update table periodically while scanning
         if self.scanning:
-            nets_airdump = parse_airodump_csv(CAPTURE_CSV)
-            nets_nmcli = parse_nmcli_wifi()
-
-            # Merge + deduplicate by BSSID (prefer airodump row if present)
-            merged = {}
-            for n in nets_nmcli:
-                merged[n["BSSID"]] = n
-            for n in nets_airdump:
-                merged[n["BSSID"]] = n
-
-            nets = list(merged.values())
-
-            # Re-sort after merge
-            def pwr_key(n):
-                try:
-                    return int(n["PWR"])
-                except Exception:
-                    return -999
-
-            nets.sort(key=pwr_key, reverse=True)
-
-            # Preserve selection BSSID if user clicked a row
+            nets, note = self.backend.snapshot_networks()
             selected = None
             sel = self.tree.selection()
             if sel:
-                selected_vals = self.tree.item(sel[0], "values")
-                if len(selected_vals) >= 7:
-                    selected = selected_vals[7]  # BSSID column
-
+                vals = self.tree.item(sel[0], "values")
+                if vals:
+                    selected = vals[list(NETWORK_COLUMNS).index("BSSID")]
             self.clear_table()
-
-            best_count = 0
-            for n in nets:
-                values = (
-                    n["ESSID"],
-                    n["PWR"],
-                    n["CH"],
-                    n["Band"],
-                    n["Privacy"],
-                    n["Cipher"],
-                    n["Auth"],
-                    n["BSSID"],
-                    n["Beacons"],
-                    n["IV"],
-                )
+            for n in nets[:200]:
+                values = tuple(n.get(c, "") for c in NETWORK_COLUMNS)
                 iid = self.tree.insert("", "end", values=values)
-                if selected and n["BSSID"] == selected:
+                if selected and n.get("BSSID") == selected:
                     self.tree.selection_set(iid)
-
-                best_count += 1
-                if best_count >= 200:  # avoid huge UI lag
-                    break
-
-            self.set_status(
-                f"Scanning... airodump={len(nets_airdump)} nmcli={len(nets_nmcli)} merged={len(nets)} (showing up to 200)"
-            )
-
+            self.set_status(note)
         self.after(REFRESH_MS, self.refresh_table)
 
+    def on_double_click(self, _event=None):
+        sel = self.tree.selection()
+        if not sel:
+            return
+        vals = self.tree.item(sel[0], "values")
+        cols = list(NETWORK_COLUMNS)
+        essid = vals[cols.index("ESSID")]
+        bssid = vals[cols.index("BSSID")]
+        ch = vals[cols.index("CH")]
+        # Hand the target to the devices window as a separate process.
+        subprocess.Popen([sys.executable, "network_scanner_devices.py", essid, bssid, ch])
+
     def run_recovery(self):
-        # stop scan first
         if self.scanning:
             self.stop_scan()
+        self.set_status("Restoring Wi-Fi...")
 
-        if not os.path.exists(RECOVERY_SCRIPT):
-            messagebox.showerror("Missing file", f"Couldn't find {RECOVERY_SCRIPT} in this folder.")
-            return
+        def worker():
+            ok, msg = self.backend.recover()
+            self.after(0, self.set_status, msg)
 
-        self.set_status("Running recovery.py ...")
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _on_close(self):
         try:
-            # Run recovery in a separate thread so UI doesn't freeze
-            def worker():
-                # If recovery needs sudo, you can change this to ["sudo", "python3", RECOVERY_SCRIPT]
-                subprocess.run(["python3", RECOVERY_SCRIPT])
-                self.after(0, self.set_status, "Recovery finished.")
-
-            threading.Thread(target=worker, daemon=True).start()
-        except Exception as e:
-            messagebox.showerror("Recovery error", str(e))
-            self.set_status("Recovery error.")
+            self.scanning = False
+            self.backend.stop_scan()
+        finally:
+            self.destroy()
 
 
 if __name__ == "__main__":
-    app = WifiNetworksUI()
-    app.mainloop()
+    WifiNetworksUI().mainloop()
