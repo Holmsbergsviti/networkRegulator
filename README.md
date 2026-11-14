@@ -35,6 +35,21 @@ python3 netreg_backend.py
 - **Scanning** and **device discovery** work out of the box with built-in
   macOS tools — no extra install.
 - macOS does **not** expose other networks' BSSIDs, so that column may be blank.
+- On recent macOS (14+), Wi-Fi **names** are hidden (`<redacted>`) from
+  unprivileged tools — the network you're on is still labelled `(connected)`.
+
+#### Seeing real Wi-Fi names (optional, macOS 14+)
+To unlock real SSIDs you must run the app as a bundle that holds Location
+Services permission (a plain script can't). No paid Apple account needed:
+
+```bash
+./build_macapp.sh         # packages + ad-hoc-signs dist/NetworkRegulator.app
+open dist/NetworkRegulator.app
+```
+
+Allow **Location** when macOS prompts on first launch. The app then reads
+names via Apple's CoreWLAN API. Requires `pyobjc` (the build script installs
+`pyobjc-framework-CoreWLAN` and `pyobjc-framework-CoreLocation` for you).
 - **Disconnecting** a device needs packet injection, which the **built-in Mac
   card cannot do**. To enable it:
   1. `brew install aircrack-ng`
