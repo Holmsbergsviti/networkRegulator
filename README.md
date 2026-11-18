@@ -10,11 +10,19 @@ right hardware) disconnect a device.
 
 ## Running
 
+**Easiest (macOS, no Terminal):** double-click **`run.command`** in Finder.
+The app launches in a window; you don't type anything. (First time only: if
+macOS blocks it as an "unidentified developer", right-click `run.command` →
+**Open** → **Open**.)
+
+**From a terminal (any platform):**
+
 ```bash
 python3 network_scanner.py
 ```
 
-Double-click a network to open its devices window.
+Double-click a network to open its devices window, and double-click a device to
+see its details and open ports.
 
 ## Platform support
 
