@@ -59,10 +59,13 @@ class WifiNetworksUI(tk.Tk):
                 self.tree.column(col, width=80, anchor="center")
         self.tree.bind("<Double-1>", self.on_double_click)
 
-        note = (f"Double-click a network to see its devices.  "
-                f"Deauth on this machine: "
-                f"{'available' if self.caps.can_deauth else 'unavailable'}.")
-        ttk.Label(self, text=note, foreground="gray").pack(fill="x", padx=10, pady=(0, 10))
+        if self.caps.can_deauth:
+            deauth_line = "Disconnecting devices is ready on this machine."
+        else:
+            deauth_line = "Disconnecting devices is not available here. " + self.caps.deauth_note
+        note = "Double-click a network to see its devices.  " + deauth_line
+        ttk.Label(self, text=note, foreground="gray", wraplength=1060,
+                  justify="left").pack(fill="x", padx=10, pady=(0, 10))
 
         self.protocol("WM_DELETE_WINDOW", self._on_close)
         self.after(REFRESH_MS, self.refresh_table)

@@ -141,6 +141,22 @@ class MacBackend(Backend):
 
         self._has_aircrack = bool(shutil.which("airodump-ng") and shutil.which("aireplay-ng"))
 
+    # ---- display helpers -------------------------------------------------- #
+    CONNECTED_SUFFIX = "  (connected)"
+
+    @staticmethod
+    def _display_name(name: str, connected: bool, fallback: str = "") -> str:
+        """One place that builds the ESSID shown in the table, so the
+        '(connected)' marker is consistent and blank names never leak through.
+        A non-connected network with no name returns "" so the caller drops it;
+        the connected network always keeps a name so its row stays visible."""
+        name = (name or "").strip()
+        if connected and not name:
+            name = (fallback or "").strip() or "<hidden by macOS>"
+        if connected:
+            return name + MacBackend.CONNECTED_SUFFIX
+        return name
+
     # ---- one-time setup --------------------------------------------------- #
     def prepare(self):
         """Request Location Services so CoreWLAN can return real SSIDs.
@@ -222,10 +238,12 @@ class MacBackend(Backend):
             return None
         rows = []
         for n in nets:
-            essid = n["ESSID"] + ("  (connected)" if n.get("connected") else "")
+            essid = self._display_name(n.get("ESSID", ""), n.get("connected"))
             rows.append(_empty_net(ESSID=essid, CH=n.get("CH", ""),
                                    Band=n.get("Band", "?"), PWR=n.get("PWR", ""),
                                    BSSID=n.get("BSSID", "")))
+        # drop nameless (hidden) non-connected networks so no blank row shows
+        rows = [r for r in rows if r["ESSID"]]
         best: dict[str, dict] = {}
         for r in rows:
             prev = best.get(r["ESSID"])
@@ -305,13 +323,12 @@ class MacBackend(Backend):
 
     @staticmethod
     def _net_from_sp(net: dict, connected: bool, connected_ssid: str = "") -> dict:
-        essid = net.get("_name", "")
-        if connected:
-            # macOS 26 redacts SSIDs without Location Services and newer builds
-            # broke `networksetup -getairportnetwork`, so the name may be
-            # unavailable. Still mark the network you're actually on so it's
-            # obvious which row is yours.
-            essid = (connected_ssid or essid or "<hidden by macOS>") + "  (connected)"
+        raw = net.get("_name", "")
+        # macOS 26 redacts SSIDs without Location Services and newer builds
+        # broke `networksetup -getairportnetwork`, so the connected network's
+        # name may be unavailable. _display_name still marks the row you're on
+        # (falling back to "<hidden by macOS>") so it's obvious which is yours.
+        essid = MacBackend._display_name(connected_ssid or raw, connected, fallback=raw)
         ch_raw = str(net.get("spairport_network_channel", ""))
         m = re.match(r"\s*(\d+)", ch_raw)
         ch = m.group(1) if m else ""

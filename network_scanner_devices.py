@@ -53,7 +53,7 @@ class DevicesUI(tk.Tk):
 
         foot = self.caps.device_note
         if not self.caps.can_deauth:
-            foot += "  Disconnect is disabled: " + self.caps.deauth_note
+            foot += "  The Disconnect button is off: " + self.caps.deauth_note
         ttk.Label(self, text=foot, foreground="gray", wraplength=960,
                   justify="left").pack(fill="x", padx=10, pady=(0, 10))
 
