@@ -509,14 +509,28 @@ class MacBackend(Backend):
         hosts = list(net.hosts())
         if len(hosts) > 254:
             hosts = hosts[:254]
+        total = len(hosts)
+
+        # Ping every address in parallel, reporting progress into the device
+        # note as we go so the UI shows how far along the sweep is.
+        progress_lock = threading.Lock()
+        done = {"n": 0}
 
         def ping(h):
             subprocess.run(["ping", "-c", "1", "-t", "1", str(h)],
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            with progress_lock:
+                done["n"] += 1
+                n = done["n"]
+            if n % 8 == 0 or n == total:
+                with self._lock:
+                    self._dev_note = f"Pinging the local network… {n}/{total} addresses"
 
-        with ThreadPoolExecutor(max_workers=64) as ex:
+        with ThreadPoolExecutor(max_workers=128) as ex:
             list(ex.map(ping, hosts))
 
+        with self._lock:
+            self._dev_note = "Reading the device (ARP) table…"
         rows: list[dict] = []
         try:
             arp = subprocess.run(["arp", "-a", "-n"], capture_output=True, text=True, timeout=10).stdout
@@ -540,14 +554,23 @@ class MacBackend(Backend):
             seen.add(dip)
             rows.append({"IP": dip, "MAC": mac, "Hostname": ""})
 
-        # best-effort reverse DNS, bounded
+        # best-effort reverse DNS, bounded so a slow resolver can't hang the scan
+        if rows:
+            with self._lock:
+                self._dev_note = f"Found {len(rows)} device(s); resolving names…"
+
         def resolve(row):
             try:
                 row["Hostname"] = socket.gethostbyaddr(row["IP"])[0]
             except Exception:
                 row["Hostname"] = ""
-        with ThreadPoolExecutor(max_workers=32) as ex:
-            list(ex.map(resolve, rows))
+        old_timeout = socket.getdefaulttimeout()
+        socket.setdefaulttimeout(1.0)
+        try:
+            with ThreadPoolExecutor(max_workers=32) as ex:
+                list(ex.map(resolve, rows))
+        finally:
+            socket.setdefaulttimeout(old_timeout)
 
         rows.sort(key=lambda r: tuple(int(x) for x in r["IP"].split(".")))
         note = f"{len(rows)} device(s) on {net.with_prefixlen} (via {iface})."

@@ -13,7 +13,7 @@ from tkinter import ttk, messagebox
 
 from netreg_backend import get_backend
 
-REFRESH_MS = 2000
+REFRESH_MS = 1000
 
 ESSID = sys.argv[1] if len(sys.argv) > 1 else ""
 BSSID = sys.argv[2] if len(sys.argv) > 2 else ""
