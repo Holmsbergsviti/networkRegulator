@@ -14,7 +14,8 @@ import threading
 import tkinter as tk
 from tkinter import ttk
 
-from netreg_backend import scan_ports, service_name, ping_host, resolve_hostname
+from netreg_backend import (scan_ports, service_name, ping_host,
+                            resolve_hostname, vendor_for_mac)
 
 IP = sys.argv[1] if len(sys.argv) > 1 else ""
 MAC = sys.argv[2] if len(sys.argv) > 2 else ""
@@ -31,7 +32,7 @@ class DeviceDetailUI(tk.Tk):
         info = ttk.LabelFrame(self, text="Device")
         info.pack(fill="x", padx=12, pady=(12, 8))
         self.vars = {}
-        for label in ("IP", "MAC", "Hostname", "Reachable"):
+        for label in ("IP", "MAC", "Vendor", "Hostname", "Reachable"):
             row = ttk.Frame(info)
             row.pack(fill="x", padx=10, pady=3)
             ttk.Label(row, text=label + ":", width=11, anchor="w").pack(side="left")
@@ -41,6 +42,7 @@ class DeviceDetailUI(tk.Tk):
 
         self.vars["IP"].set(IP or "(unknown)")
         self.vars["MAC"].set(MAC or "—")
+        self.vars["Vendor"].set(vendor_for_mac(MAC) or "unknown" if MAC else "—")
         self.vars["Hostname"].set(HOSTNAME or "…")
         self.vars["Reachable"].set("checking…")
 
@@ -102,8 +104,12 @@ class DeviceDetailUI(tk.Tk):
 
         try:
             scan_ports(IP, on_open=on_open)
-            msg = (f"Scan complete — {found['n']} open port(s)."
-                   if found["n"] else "Scan complete — no common ports open.")
+            if found["n"]:
+                msg = f"Scan complete — {found['n']} open port(s)."
+            else:
+                msg = ("Scan complete — no common ports open. That's normal for "
+                       "phones, laptops and most IoT devices, which don't run "
+                       "services you can connect to.")
         except Exception as e:
             msg = f"Scan error: {e}"
         self.after(0, self._scan_done, msg)
