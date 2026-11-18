@@ -294,6 +294,10 @@ class MacBackend(Backend):
     # ---- network scanning ------------------------------------------------- #
     def start_scan(self):
         self._scanning = True
+        # Set an immediate "working" note so the UI shows activity before the
+        # first (heavy) scan pass returns, instead of the stale previous note.
+        with self._lock:
+            self._net_note = "Scanning nearby networks… (first pass can take a few seconds)"
         if self._scan_thread and self._scan_thread.is_alive():
             return
         self._scan_thread = threading.Thread(target=self._scan_loop, daemon=True)
@@ -457,6 +461,8 @@ class MacBackend(Backend):
     def start_devices(self, target: dict):
         self._dev_target = target or {}
         self._dev_scanning = True
+        with self._lock:
+            self._dev_note = "Scanning the local network… (pinging every address, ~10–15s)"
         if self._dev_thread and self._dev_thread.is_alive():
             return
         self._dev_thread = threading.Thread(target=self._dev_loop, daemon=True)

@@ -81,10 +81,15 @@ class DevicesUI(tk.Tk):
 
     def stop_scan(self):
         self.scanning = False
-        threading.Thread(target=self.backend.stop_devices, daemon=True).start()
+        self.set_status("Stopping…")
         self.start_btn.config(state="normal")
         self.stop_btn.config(state="disabled")
-        self.set_status("Stopped.")
+
+        def worker():
+            self.backend.stop_devices()
+            self.after(0, self.set_status, "Stopped. Scan not running.")
+
+        threading.Thread(target=worker, daemon=True).start()
 
     def refresh_table(self):
         if self.scanning:

@@ -89,10 +89,17 @@ class WifiNetworksUI(tk.Tk):
 
     def stop_scan(self):
         self.scanning = False
-        self.set_status("Stopping...")
-        threading.Thread(target=self.backend.stop_scan, daemon=True).start()
+        self.set_status("Stopping…")
         self.start_btn.config(state="normal")
         self.stop_btn.config(state="disabled")
+
+        def worker():
+            self.backend.stop_scan()
+            # refresh_table no longer touches the status once scanning is off,
+            # so confirm the stopped state here.
+            self.after(0, self.set_status, "Stopped. Scan not running.")
+
+        threading.Thread(target=worker, daemon=True).start()
 
     def refresh_table(self):
         if self.scanning:
