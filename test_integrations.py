@@ -72,7 +72,17 @@ check("eval targets the IP + spoofs gateway",
       mitm.build_eval("192.168.1.211") ==
       "set arp.spoof.targets 192.168.1.211; set arp.spoof.fullduplex true; net.probe on; arp.spoof on")
 check("sniff flag adds net.sniff", "net.sniff on" in mitm.build_eval("10.0.0.5", sniff=True))
+check("sniff scopes capture to the target (BPF host filter)",
+      "set net.sniff.filter host 10.0.0.5" in mitm.build_eval("10.0.0.5", sniff=True))
+check("no sniff => no net.sniff", "net.sniff" not in mitm.build_eval("10.0.0.5", sniff=False))
 check("fullduplex false honored", "fullduplex false" in mitm.build_eval("10.0.0.5", full_duplex=False))
+check("admin cmd with log redirects bettercap output to it",
+      "&>" in mitm._mac_admin_command(["bettercap"], "/tmp/t.log")[2]
+      and "/tmp/t.log" in mitm._mac_admin_command(["bettercap"], "/tmp/t.log")[2])
+check("admin cmd without log discards output",
+      "/dev/null" in mitm._mac_admin_command(["bettercap"])[2])
+check("default_log_path is a .log file path",
+      isinstance(mitm.default_log_path(), str) and mitm.default_log_path().endswith(".log"))
 check("argv carries -iface and -eval",
       mitm.build_argv("10.0.0.9", iface="en0")[1:3] == ["-iface", "en0"] and
       "-eval" in mitm.build_argv("10.0.0.9", iface="en0"))
