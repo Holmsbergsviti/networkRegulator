@@ -157,6 +157,19 @@ class MacBackend(Backend):
             return name + MacBackend.CONNECTED_SUFFIX
         return name
 
+    @staticmethod
+    def _collapse_connected(rows: list[dict]) -> list[dict]:
+        """macOS can report the current network under more than one interface
+        block, which would tag two rows '(connected)'. Keep only one: prefer a
+        row with a real/redacted name over the '<hidden by macOS>' placeholder,
+        then the strongest signal."""
+        suffix = MacBackend.CONNECTED_SUFFIX
+        conn = [r for r in rows if r["ESSID"].endswith(suffix)]
+        if len(conn) <= 1:
+            return rows
+        keep = max(conn, key=lambda r: (not r["ESSID"].startswith("<hidden by macOS>"), _pwr(r)))
+        return [r for r in rows if not r["ESSID"].endswith(suffix) or r is keep]
+
     # ---- one-time setup --------------------------------------------------- #
     def prepare(self):
         """Request Location Services so CoreWLAN can return real SSIDs.
@@ -244,6 +257,7 @@ class MacBackend(Backend):
                                    BSSID=n.get("BSSID", "")))
         # drop nameless (hidden) non-connected networks so no blank row shows
         rows = [r for r in rows if r["ESSID"]]
+        rows = self._collapse_connected(rows)
         best: dict[str, dict] = {}
         for r in rows:
             prev = best.get(r["ESSID"])
@@ -281,6 +295,8 @@ class MacBackend(Backend):
 
         # drop entries with no usable name (macOS sometimes returns blank rows)
         rows = [r for r in rows if r["ESSID"]]
+        # macOS can list the current network under two interface blocks; keep one
+        rows = self._collapse_connected(rows)
 
         # de-dupe by ESSID keeping strongest
         best: dict[str, dict] = {}
