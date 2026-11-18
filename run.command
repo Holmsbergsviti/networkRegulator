@@ -8,6 +8,14 @@
 #
 cd "$(dirname "$0")"
 
+# Pull the latest version if this is a git checkout. Best-effort: --ff-only so
+# it never makes surprise merge commits, and it never blocks launch -- if you
+# have local edits or no network, it just runs the version you already have.
+if [ -d .git ] && command -v git >/dev/null 2>&1; then
+  echo "Checking for updates…"
+  git pull --ff-only 2>&1 || echo "(couldn't update — launching the current version)"
+fi
+
 # First-run convenience: make sure the Wi-Fi-name libraries are present so real
 # SSIDs can show. Harmless if they're already installed or the install fails.
 if ! python3 -c "import CoreWLAN, CoreLocation" >/dev/null 2>&1; then
