@@ -123,6 +123,27 @@ check("set_name/label resolves a host to its name",
       (_s.set_name("17.8.136.52", "apple.com") or _s.label("17.8.136.52")) == "apple.com")
 check("human_bytes formats KB", nt.human_bytes(2048) == "2.0 KB")
 
+print("netreg_seen (stabilize scan results across sweeps):")
+import netreg_seen as seen
+_clk = {"t": 0.0}
+_tr = seen.SeenTracker(ttl=5.0, keys=("MAC", "IP"), clock=lambda: _clk["t"])
+r0 = _tr.update([{"MAC": "aa", "IP": "1"}, {"MAC": "bb", "IP": "2"}])
+check("both devices present on first sweep", len(r0) == 2)
+_clk["t"] = 3.0
+r1 = _tr.update([{"MAC": "aa", "IP": "1"}])  # bb missed this sweep
+check("missed device kept within ttl", len(r1) == 2)
+_clk["t"] = 9.0
+r2 = _tr.update([{"MAC": "aa", "IP": "1"}])  # bb now expired (>5s)
+check("device dropped after ttl", len(r2) == 1 and r2[0]["MAC"] == "aa")
+check("same id not duplicated across sweeps",
+      len(_tr.update([{"MAC": "aa", "IP": "1"}])) == 1)
+_tr2 = seen.SeenTracker(ttl=5.0, keys=("MAC", "IP"), clock=lambda: _clk["t"])
+_tr2.update([{"MAC": "", "IP": "10.0.0.9"}])
+check("falls back to IP when MAC is blank",
+      len(_tr2.update([{"MAC": "", "IP": "10.0.0.9"}])) == 1)
+_tr2.reset()
+check("reset clears kept items", len(_tr2.update([])) == 0)
+
 print()
 if fails:
     print(f"{len(fails)}/{double} FAILED: {fails}")
