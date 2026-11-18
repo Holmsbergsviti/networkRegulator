@@ -28,7 +28,7 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 
 cp netreg_backend.py network_scanner.py network_scanner_devices.py \
-   recovery.py mac_native.py "$APP/Contents/Resources/"
+   device_detail.py recovery.py mac_native.py "$APP/Contents/Resources/"
 
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
