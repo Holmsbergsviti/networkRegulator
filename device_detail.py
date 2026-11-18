@@ -16,6 +16,11 @@ from tkinter import ttk
 
 from netreg_backend import scan_ports, service_name, ping_host, resolve_hostname
 
+try:
+    import netreg_integrations as integrations
+except Exception:
+    integrations = None
+
 IP = sys.argv[1] if len(sys.argv) > 1 else ""
 MAC = sys.argv[2] if len(sys.argv) > 2 else ""
 HOSTNAME = sys.argv[3] if len(sys.argv) > 3 else ""
@@ -31,7 +36,7 @@ class DeviceDetailUI(tk.Tk):
         info = ttk.LabelFrame(self, text="Device")
         info.pack(fill="x", padx=12, pady=(12, 8))
         self.vars = {}
-        for label in ("IP", "MAC", "Hostname", "Reachable"):
+        for label in ("IP", "MAC", "Vendor", "Hostname", "Reachable"):
             row = ttk.Frame(info)
             row.pack(fill="x", padx=10, pady=3)
             ttk.Label(row, text=label + ":", width=11, anchor="w").pack(side="left")
@@ -41,6 +46,13 @@ class DeviceDetailUI(tk.Tk):
 
         self.vars["IP"].set(IP or "(unknown)")
         self.vars["MAC"].set(MAC or "—")
+        vendor = ""
+        if integrations is not None and MAC:
+            try:
+                vendor = integrations.vendor_for_mac(MAC)
+            except Exception:
+                vendor = ""
+        self.vars["Vendor"].set(vendor or "—")
         self.vars["Hostname"].set(HOSTNAME or "…")
         self.vars["Reachable"].set("checking…")
 
@@ -101,9 +113,21 @@ class DeviceDetailUI(tk.Tk):
             self.after(0, self._add_port, port)
 
         try:
-            scan_ports(IP, on_open=on_open)
-            msg = (f"Scan complete — {found['n']} open port(s)."
-                   if found["n"] else "Scan complete — no common ports open.")
+            fast = None
+            if integrations is not None:
+                try:
+                    fast = integrations.fast_port_scan(IP)
+                except Exception:
+                    fast = None
+            if fast is not None:
+                for port in fast:
+                    on_open(port)
+                scanner = "fast scanner"
+            else:
+                scan_ports(IP, on_open=on_open)
+                scanner = "common ports"
+            msg = (f"Scan complete ({scanner}) — {found['n']} open port(s)."
+                   if found["n"] else f"Scan complete ({scanner}) — none open.")
         except Exception as e:
             msg = f"Scan error: {e}"
         self.after(0, self._scan_done, msg)
