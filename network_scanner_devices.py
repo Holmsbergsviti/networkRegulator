@@ -46,6 +46,20 @@ class DevicesUI(tk.Tk):
         if not self.caps.can_deauth:
             self.disc_btn.config(state="disabled")
 
+        # Route a device's traffic through this machine (bettercap MITM).
+        # Own-network use only; enabled only when bettercap is installed and
+        # the backend gives us an IP to target.
+        self.route_btn = ttk.Button(top, text="Route via this Mac",
+                                    command=self.route_selected)
+        self.route_btn.pack(side="right", padx=8)
+        try:
+            import netreg_mitm
+            self._can_route = netreg_mitm.available() and ("IP" in self.columns)
+        except Exception:
+            self._can_route = False
+        if not self._can_route:
+            self.route_btn.config(state="disabled")
+
         self.tree = ttk.Treeview(self, columns=self.columns, show="headings", height=20)
         self.tree.pack(fill="both", expand=True, padx=10, pady=(0, 10))
         for col in self.columns:
@@ -54,6 +68,13 @@ class DevicesUI(tk.Tk):
         self.tree.bind("<Double-1>", self.on_double_click)
 
         foot = self.caps.device_note + "  Double-click a device for its details and open ports."
+        try:
+            import netreg_mitm as _m
+            if _m.available() and ("IP" in self.columns):
+                foot += ("  \"Route via this Mac\" sends a selected device's "
+                         "traffic through this computer (own-network use only).")
+        except Exception:
+            pass
         if not self.caps.can_deauth:
             foot += "  The Disconnect button is off: " + self.caps.deauth_note
         ttk.Label(self, text=foot, foreground="gray", wraplength=960,
@@ -121,6 +142,30 @@ class DevicesUI(tk.Tk):
         row = dict(zip(self.columns, vals))
         # station MAC is called different things per backend
         return row.get("Station MAC") or row.get("MAC")
+
+    def route_selected(self):
+        if not getattr(self, "_can_route", False):
+            messagebox.showinfo(
+                "Not available",
+                "Routing traffic through this machine needs bettercap "
+                "(install it with: brew install bettercap) and a device with "
+                "an IP address.")
+            return
+        sel = self.tree.selection()
+        if not sel:
+            messagebox.showinfo("Pick a device",
+                                "Select a device first to route its traffic "
+                                "through this Mac.")
+            return
+        row = dict(zip(self.columns, self.tree.item(sel[0], "values")))
+        ip = row.get("IP", "")
+        if not ip:
+            messagebox.showinfo("No IP", "This device has no IP to target.")
+            return
+        mac = row.get("MAC") or row.get("Station MAC") or ""
+        host = row.get("Hostname", "")
+        # own window/process, like the device-detail view
+        subprocess.Popen([sys.executable, "mitm_window.py", ip, mac, host])
 
     def disconnect_selected(self):
         if not self.caps.can_deauth:
