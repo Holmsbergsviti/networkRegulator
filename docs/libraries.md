@@ -1,196 +1,154 @@
-# Network Libraries & Tools — Research Catalog
+# Network Libraries & Tools — Research Catalog (net-new finds)
 
-> **Scope & authorization.** This project operates **only on networks the owner controls** (own home/lab network, for defensive testing and self-administration). Several tools below (ARP spoofing / MITM, deauth) are *lawful only on networks you own or are explicitly authorized to test*. Using them against networks or devices you don't control is illegal in most jurisdictions. Every tool here is catalogued for own-network, authorized use.
+> **Scope & authorization.** This project operates **only on networks the owner controls** (own home/lab network, for defensive testing and self-administration). Several tools below (ARP/LLMNR spoofing, MITM, deauth) are *lawful only on networks you own or are explicitly authorized to test*. Using them elsewhere is illegal in most jurisdictions. Everything here is catalogued for own-network, authorized use.
 
-This document catalogs open-source libraries usable by NetworkRegulator, grouped by task. For each, it lists the key functions/capabilities, how they'd be used from our GUI backend, and cross-platform notes (macOS → Windows → Linux, our priority order). Tools already wired into the project are marked **[IN USE]**; the rest are **[RECOMMENDED]** additions.
+**Focus of this doc: libraries we do _not_ already use.** Our current stack is nmap, scapy, aircrack-ng, and raw sockets (summarized at the very bottom for reference). Everything in the numbered sections below is a **net-new** candidate — grouped by task, with key functions, how it'd plug into our GUI backend, and macOS/Windows/Linux notes (our priority order). The handful of already-in-use tools that appear are only there as a baseline to compare against, and are labeled **[IN USE]**.
 
 ---
 
 ## Quick answer: "the library that lets a computer imitate the router so all traffic goes through it"
 
-What you're describing is **ARP spoofing / gateway impersonation** (a man-in-the-middle, "MITM", technique). The machine tells every device on the LAN "I am the router (the gateway/default route)," and tells the router "I am that device," so traffic is relayed through your machine. The clearest public library/tool for this is:
+This is **ARP spoofing / gateway impersonation** (man-in-the-middle). Since we only have scapy today, the net-new recommendation is:
 
-### ⭐ bettercap — https://github.com/bettercap/bettercap  (Go; MIT)
-The modern successor to ettercap. Its `arp.spoof` module does exactly the gateway-impersonation you asked about.
+### ⭐ bettercap — https://github.com/bettercap/bettercap  (Go; MIT) — **NET-NEW**
+Modern successor to ettercap. `arp.spoof` does the gateway impersonation; it also has a **REST API + scriptable caplets**, so we can drive it from our GUI without a terminal.
+- `net.probe on` — discover every host on the subnet.
+- `set arp.spoof.targets <ip,…>` + `set arp.spoof.fullduplex true` + `arp.spoof on` — impersonate the gateway; target traffic now flows through this machine.
+- `net.sniff on` (+ `net.sniff.filter`, `net.sniff.output`) — inspect / save the redirected traffic.
+- `dns.spoof`, `http.proxy`/`https.proxy` — act on traffic once it's flowing through you.
+- `api.rest` module — our Python backend POSTs commands instead of parsing stdout (cleanest integration).
 
-- `net.probe on` — actively discover every host on the subnet (fills the host list).
-- `set arp.spoof.targets <ip,ip,…>` — the victims to spoof (or leave unset for the whole subnet).
-- `set arp.spoof.fullduplex true` — poison **both** the targets **and** the gateway, so traffic flows both directions through you.
-- `arp.spoof on` — start impersonating the gateway; all target traffic is now routed through this machine.
-- `net.sniff on` — capture/inspect the redirected traffic.
-- `set net.sniff.filter`, `net.sniff.output` — BPF filter / save to pcap.
-- `dns.spoof` module — once you're the gateway, answer DNS queries with addresses you choose.
-- `http.proxy` / `https.proxy` modules — transparently intercept/modify web traffic flowing through you.
-- `wifi.recon` + `wifi.deauth <BSSID>` — wifi monitor-mode discovery and deauth (overlaps aircrack-ng).
-- Scriptable via **caplets** (`.cap` files) — a sequence of the commands above, which is ideal for driving it from our GUI without the user touching a terminal.
-- Also exposes a **REST API** (`api.rest` module) — our Python backend can POST commands to bettercap instead of parsing stdout. This is the cleanest integration path.
+> On "**especially IP 211**": most likely you mean *targeting the gateway* (often `192.168.x.1`, but on your LAN it may end in `.211`, or `.211` is the device whose traffic you want routed). **Tell me what `192.168.x.211` is (a device, or the router) and I'll give exact bettercap commands / a ready caplet.**
 
-> On "**especially IP 211**": most likely you mean *targeting the gateway* (commonly `192.168.x.1`, but on your network it may end in `.211`, or `.211` is the device whose traffic you want to route). In bettercap you set `arp.spoof.targets` to the device(s) you want routed, and it spoofs the gateway automatically. If `.211` is actually the *gateway's* address on your LAN, bettercap discovers it automatically from the routing table. **Tell me what `192.168.x.211` is on your network (a device, or the router) and I'll give exact commands/caplet.**
-
-**Cross-platform:** Linux (best — full feature set). macOS (supported; Homebrew `brew install bettercap`; ARP spoof + sniff work on the built-in interface, wifi monitor-mode features need a compatible adapter). Windows (partial; works but driver/npcap caveats, wifi features limited).
-
-**Alternatives for the same job** (see the MITM section below): `ettercap`, `scapy` (write it yourself in ~30 lines), `arpspoof` from the **dsniff** suite.
+Net-new alternatives covered in §4: **mitmproxy**, **Responder**, **dnschef**, plus the classics ettercap / arpspoof.
 
 ---
 
-## 1. Device discovery / searching for devices on the network
+## 1. Device discovery — net-new
 
-| Library | Lang | Install | Status |
+| Library | Lang | Install | Why it's new/useful |
 |---|---|---|---|
-| **nmap** (via `python-nmap` / `python-libnmap`) | C core + Py wrapper | `brew install nmap` / `pip install python-nmap` | RECOMMENDED |
-| **scapy** | Python | `pip install scapy` | RECOMMENDED |
-| **arp-scan** | C | `brew install arp-scan` | RECOMMENDED |
-| **python-zeroconf** | Python | `pip install zeroconf` | RECOMMENDED |
-| **netdisco** | Python | `pip install netdisco` | RECOMMENDED |
-| raw `socket` + ARP table parsing | Python stdlib | built in | **[IN USE]** (our `network_scanner_devices.py` LAN sweep) |
+| **getmac** | Python | `pip install getmac` | Cross-platform MAC lookup for **local interfaces AND remote hosts** — pure-Python, no nmap dependency. Great portable fallback. |
+| **pywifi** | Python | `pip install pywifi` | Programmatic **wifi scanning + connect/disconnect** control (SSID list, signal, connect). Windows/Linux first-class; macOS limited (see note). |
+| **python-zeroconf** | Python | `pip install zeroconf` | **mDNS/Bonjour** discovery — names Chromecasts, printers, AirPlay, HomeKit, `_http._tcp`, etc. Gives friendly names to devices with no reverse DNS. |
+| **async-upnp-client** / **upnpclient** | Python | `pip install async-upnp-client` | **UPnP/SSDP** discovery — routers, smart TVs, media servers; can also read device descriptions. |
+| **netdisco** | Python | `pip install netdisco` | High-level UPnP+mDNS roll-up (used by Home Assistant) → friendly device *types* (Sonos, Roku, Hue). |
+| **impacket** | Python | `pip install impacket` | **NetBIOS/SMB** name resolution → hostnames + OS hints for Windows devices the mDNS/UPnP sweeps miss. Huge protocol toolkit. |
+| **ifaddr** / **netifaces2** / **psutil** | Python | `pip install ifaddr psutil` | Enumerate our own interfaces/subnets cleanly and cross-platform (what to scan, which gateway). Replaces brittle shell parsing. |
 
-**nmap** — the workhorse. Key capabilities we'd call:
-- `-sn` (ping/host discovery, "no port scan") — list live hosts on a subnet. Fast way to populate the device list.
-- `-PR` — ARP host discovery on the local segment (most reliable on a LAN).
-- `-O` — OS fingerprinting. `-sV` — service/version detection. `--osscan-guess`.
-- `-oX` — XML output; `python-libnmap` parses this into objects (`NmapReport`, `NmapHost`, host.address, host.hostnames, host.mac, host.vendor).
-- `python-nmap`: `nm.scan(hosts='192.168.1.0/24', arguments='-sn')`, then `nm.all_hosts()`, `nm[host].state()`, `nm[host]['vendor']`.
+**getmac** — `get_mac_address(ip="192.168.1.5")`, `get_mac_address(interface="en0")`, `get_mac_address(hostname="host.local")`. Works macOS/Windows/Linux. The simplest portable way to attach a MAC to every discovered IP without shelling out to `arp`.
 
-**scapy** — programmatic, no external binary. Key functions:
-- `arping("192.168.1.0/24")` — one-liner ARP sweep returning (answered, unanswered); each answer gives IP + MAC. This is the cleanest own-network device discovery.
-- `srp(Ether(dst="ff:ff:ff:ff:ff:ff")/ARP(pdst=subnet))` — the manual form.
-- `sniff(prn=…, filter="arp")` — passively watch who's on the network.
-- Fully cross-platform (needs Npcap on Windows, libpcap on macOS/Linux).
+**pywifi** — `PyWiFi().interfaces()`, `iface.scan()` → `iface.scan_results()` (each has `.ssid`, `.bssid`, `.signal`), `iface.connect(profile)` / `iface.disconnect()`. This is the clean cross-platform way to build the "scan wifi networks" and "connect/disconnect *this machine*" UI.
+> **macOS note:** pywifi's macOS backend is limited. The native route on macOS is **CoreWLAN** via **pyobjc** (`CWWiFiClient.sharedWiFiClient().interface().scanForNetworks_error_(...)`) — net-new, first-class Apple API for SSID scan + signal. Worth a thin macOS adapter.
 
-**arp-scan** — `arp-scan --localnet` / `arp-scan -I <iface> <subnet>`: fast ARP sweep, prints IP + MAC + vendor (bundled OUI file). Linux/macOS; no native Windows.
-
-**python-zeroconf** — discover devices advertising via **mDNS/Bonjour** (printers, Chromecasts, HomeKit, `_http._tcp`, `_airplay._tcp`, etc.). `Zeroconf()`, `ServiceBrowser(zc, "_services._dns-sd._udp.local.", handler)`. Great for naming devices that answer a ping but have no reverse DNS.
-
-**netdisco** — higher-level discovery (UPnP + mDNS) used by Home Assistant; returns friendly device types (Roku, Sonos, Hue, etc.).
-
-**Cross-platform note:** our current LAN sweep (`network_scanner_devices.py`) already does a socket/ping + ARP-table read, which is the most portable baseline. nmap/scapy/zeroconf are additive and give richer data (OS, services, friendly names).
+**python-zeroconf / UPnP** — these fill the biggest gap in our current sweep: a device answers a ping but shows as a bare IP. mDNS/UPnP turn that into "Living Room TV (Samsung)".
 
 ---
 
-## 2. Port scanning / fetching open ports
+## 2. Port / service scanning — net-new
 
-| Library | Lang | Notes | Status |
+| Library | Lang | Install | Why it's new/useful |
 |---|---|---|---|
-| **nmap** | C | the standard; service + version detection | RECOMMENDED |
-| **masscan** | C | asynchronous, internet-scale speed | RECOMMENDED (power users) |
-| **scapy** | Python | custom SYN/TCP/UDP scans | RECOMMENDED |
-| raw `socket` connect scan | Python stdlib | simple TCP connect() per port | **[IN USE]** (our `device_detail.py` open-ports scan) |
+| **naabu** | Go (ProjectDiscovery) | `brew install naabu` | Fast SYN/CONNECT scanner with **JSON output** and host-discovery; built for scripting/pipelines. Can hand results to nmap for `-sV`. Actively maintained. |
+| **RustScan** | Rust | `brew install rustscan` | **Ultra-fast** full-range scan, then auto-pipes open ports **into nmap** for service detection. Best "find everything in seconds" front-end. |
+| **masscan** | C | `brew install masscan` | Asynchronous, internet-scale rate; good for a whole-subnet "what's listening anywhere" sweep. |
 
-**nmap** port-scanning flags we'd expose:
-- `-sS` SYN ("half-open") scan — fast, needs root. `-sT` full-connect (no root). `-sU` UDP.
-- `-p 1-1024` / `-p-` (all 65535) / `--top-ports 100`.
-- `-sV` version detection, `--version-intensity`. `-A` aggressive (OS+version+scripts+traceroute).
-- `-T0`..`-T5` timing templates. `--open` (only show open ports).
-- **NSE scripts** (`--script`) — huge library: `vuln`, `banner`, `http-title`, `smb-os-discovery`, etc.
+**naabu** — `naabu -host 192.168.1.0/24 -top-ports 1000 -json`. The JSON output parses straight into our backend (no stdout scraping), and its design (discovery → port list → hand to nmap) matches how we'd want the GUI to work: fast first pass, detailed second pass on click.
 
-**masscan** — `masscan 192.168.1.0/24 -p0-65535 --rate 10000`. Syntax mimics nmap but is asynchronous and extremely fast; good for a quick "what's listening anywhere on my LAN" sweep, then hand specifics to nmap for `-sV`. Linux/macOS; Windows needs Npcap.
+**RustScan** — `rustscan -a 192.168.1.10 --range 1-65535 -- -sV`. Everything after `--` is passed to nmap, so we get speed *and* version detection in one call.
 
-**scapy** custom scan — `sr1(IP(dst=ip)/TCP(dport=port, flags="S"))` and inspect the SYN/ACK vs RST flags. Lets us build exactly the scan we want (e.g., stealthier, or UDP) without a dependency on the nmap binary.
-
-**Our current approach** (`device_detail.py`) is a plain TCP `connect()` scan over a port list — portable and dependency-free, but slower and no banner/version info. Adding `-sV` via nmap would give service names (e.g., "22/tcp open ssh OpenSSH 9.6").
+> Pattern for us: **naabu/RustScan for the fast sweep, nmap `-sV` for the deep dive.** This replaces our plain `connect()` loop (which has no banner/version info) while keeping nmap only where it adds value.
 
 ---
 
-## 3. MAC address / vendor (OUI) lookup
+## 3. MAC → vendor (OUI) lookup — net-new
 
 | Library | Lang | Install | Notes |
 |---|---|---|---|
-| **mac-vendor-lookup** | Python | `pip install mac-vendor-lookup` | async, local cache, auto-updates IEEE OUI DB |
-| **manuf** | Python | `pip install manuf` | uses Wireshark's `manuf` file; offline |
-| **netaddr** | Python | `pip install netaddr` | `EUI(mac).oui.registration().org` |
-| IEEE OUI CSV | data | download `oui.csv` from IEEE | roll-your-own offline lookup |
+| **mac-vendor-lookup** | Python | `pip install mac-vendor-lookup` | `MacLookup().lookup(mac)` → "Cisco Systems". `AsyncMacLookup` for non-blocking GUI. `update_vendors()` refreshes the IEEE OUI DB. |
+| **manuf** | Python | `pip install manuf` | Offline (ships Wireshark's OUI table): `MacParser().get_manuf_long(mac)`. No network call at scan time. |
+| **netaddr** | Python | `pip install netaddr` | Bonus OUI org name (`EUI(mac).oui.registration().org`) **plus** subnet math (`IPNetwork(...).iter_hosts()`) we already need to enumerate a /24. |
 
-**mac-vendor-lookup** — `MacLookup().lookup("00:1A:2B:3C:4D:5E")` → `"Cisco Systems"`. `update_vendors()` refreshes the local DB. `AsyncMacLookup` for non-blocking GUI use. This is the simplest drop-in for showing a vendor name next to each device.
-
-**manuf** — `MacParser().get_manuf(mac)` / `get_manuf_long(mac)`; fully offline (ships the OUI table), good when we don't want network calls at scan time.
-
-**netaddr** — general IP/MAC manipulation library; the OUI org name is a bonus. Also handy for subnet math (`IPNetwork`, `.iter_hosts()`), which we already need to enumerate a /24.
-
-> Vendor from the first 3 MAC octets (the OUI) is a strong hint at device type (Apple, Samsung, Raspberry Pi, Ubiquiti…). Note: devices using **MAC randomization** (modern phones) will show no/variable vendor — worth a tooltip in the UI.
+Pair with **getmac** (§1) to get the address, then one of these to name the vendor. Note **MAC randomization** on modern phones → no/variable vendor; worth a UI tooltip.
 
 ---
 
-## 4. Traffic redirection / man-in-the-middle (router impersonation)
+## 4. Traffic redirection / MITM — net-new (we only have scapy)
 
-**Lawful only on your own / authorized network.** This is the category your "imitate the router" request falls into. Ordered best-fit first.
+**Lawful only on your own / authorized network.** Ordered best-fit first.
 
-**bettercap [RECOMMENDED — primary]** — see the Quick Answer above. `arp.spoof` for gateway impersonation, `net.sniff` to inspect, `dns.spoof`/`http.proxy` to act on the redirected traffic, REST API + caplets for clean GUI control. This is the one I'd build the feature on.
+- **bettercap** — primary, see Quick Answer. ARP spoof + sniff + DNS/HTTP tampering + REST/caplets.
+- **mitmproxy** — `pip install mitmproxy`. The Python-native way to **inspect and modify HTTP/HTTPS** once traffic routes through us (install its CA cert on the device for TLS). Scriptable with Python addons → fits our backend perfectly. Cross-platform.
+- **Responder** — https://github.com/SpiderLabs/Responder. A *different* MITM vector than ARP: poisons **LLMNR / NBT-NS / mDNS** name resolution so Windows devices talk to us. Useful on mixed home networks; net-new.
+- **dnschef** — a configurable **DNS proxy/spoofer**; redirect chosen domains once you're in-path (or as the LAN's DNS). Lightweight, scriptable.
+- **ettercap** / **arpspoof (dsniff)** — the classic ARP-MITM tools; bettercap supersedes ettercap, arpspoof is the minimal one-liner (`arpspoof -i <if> -t <target> <gateway>` + IP forwarding).
 
-**scapy [RECOMMENDED — DIY/portable]** — implement ARP spoofing ourselves, no external binary:
-- Build the poison: `ARP(op=2, pdst=victim_ip, hwdst=victim_mac, psrc=gateway_ip)` — tells the victim "the gateway's MAC is mine."
-- Mirror it toward the gateway (`psrc=victim_ip`) for full-duplex.
-- `send(pkt, loop=1, inter=2)` — resend every 2s to keep the cache poisoned.
-- Enable IP forwarding on the host (`sysctl net.inet.ip.forwarding=1` on macOS / `net.ipv4.ip_forward=1` on Linux) so traffic actually passes through instead of dropping.
-- Restore on exit: send correct ARP replies so the network heals. **Important for a GUI tool** — always restore.
-- Pros: one dependency, works everywhere scapy runs. Cons: we own the reliability/edge cases.
-
-**ettercap** — the classic MITM suite. `ettercap -T -M arp:remote /gateway// /target//`. Mature but older; bettercap is the modern replacement. Linux/macOS.
-
-**arpspoof (dsniff suite)** — minimal, single-purpose: `arpspoof -i <iface> -t <target> <gateway>`. Pair with `sysctl` IP forwarding. Good for scripting a bare-bones version. `brew install dsniff`.
-
-**mitmproxy [RECOMMENDED — the "act on traffic" half]** — once traffic is routed through us, `mitmproxy`/`mitmdump` is the Python-native way to inspect and modify HTTP/HTTPS (requires installing its CA cert on the device for TLS). `pip install mitmproxy`; scriptable with Python addons. Cross-platform. Use alongside the ARP layer above.
-
-**Cross-platform reality for MITM:**
-- **Linux** — everything works, cleanest.
-- **macOS** — scapy/bettercap/arpspoof ARP spoofing works on the built-in interface; use `sysctl -w net.inet.ip.forwarding=1`. Needs sudo. (This is separate from the wifi monitor-mode limitation that affects *deauth*.)
-- **Windows** — possible but fiddly: requires **Npcap** (WinPcap successor) for scapy/bettercap, and IP forwarding via registry/`netsh`. Lowest priority per our platform order.
+**Cross-platform MITM reality:** Linux cleanest; **macOS** works for ARP spoof/sniff on the built-in interface (`sysctl -w net.inet.ip.forwarding=1`, needs sudo); **Windows** needs **Npcap** + IP forwarding via `netsh`/registry (lowest priority).
 
 ---
 
-## 5. Wifi deauthentication / disconnecting devices
+## 5. Wifi deauth / disconnect — net-new (we have aircrack-ng)
 
-Already central to the project (aircrack-ng). Disconnecting a device over wifi = sending **deauth frames**, which needs **monitor mode + packet injection**.
+Disconnecting over wifi = sending **deauth frames**, which needs **monitor mode + injection**.
 
-| Tool | Notes | Status |
+| Tool | Lang | Why it's new/useful |
 |---|---|---|
-| **aircrack-ng suite** (`airmon-ng`, `aireplay-ng`, `airodump-ng`) | `aireplay-ng --deauth` is the core disconnect primitive | **[IN USE]** |
-| **bettercap** `wifi.deauth` | same capability inside the bettercap framework | RECOMMENDED |
-| **scapy** deauth | craft `Dot11Deauth` frames manually | RECOMMENDED (portable) |
-| **kismet** | wireless device/network detection + monitoring (not deauth) | RECOMMENDED (recon) |
+| **bettercap** `wifi.deauth` | Go | Deauth inside the same framework we'd use for MITM — one dependency for both. |
+| **mdk4** | C | Beyond aircrack: **deauth, auth floods, beacon floods, disassociation** — a fuller wireless-stress toolkit. `mdk4 <mon> d -B <BSSID>`. |
+| **wifite2** | Python | **Automation wrapper** that drives aircrack-ng/others end-to-end (pick target → attack). Good model for our "one-click disconnect" flow. |
+| **airgeddon** | Bash | Menu-driven framework wrapping the suite; useful reference for how to orchestrate the tools cleanly. |
+| **kismet** | C++ | Passive wireless **detection/monitoring** (not deauth) — maps APs/clients/signal; good recon layer. |
 
-**aireplay-ng** key use: `aireplay-ng --deauth <count> -a <AP_BSSID> -c <client_MAC> <mon_iface>` — disconnect a specific client (or broadcast with no `-c`). `airodump-ng` enumerates APs/clients first; `airmon-ng start <iface>` enables monitor mode.
-
-**scapy deauth** — `RadioTap()/Dot11(addr1=client, addr2=ap, addr3=ap)/Dot11Deauth(reason=7)`, `sendp(..., iface=mon, count=n)`. Portable if the adapter supports injection.
-
-**Hard platform limits (already noted in project memory):**
-- **macOS** — the **built-in card cannot inject**; deauth needs a **USB monitor-mode adapter** + `brew install aircrack-ng`. Scan + device-list features work without it.
-- **Windows** — standard drivers **can't do monitor mode/injection**; practically scan-only unless a special USB adapter + driver.
-- **Linux** — works with injection-capable chipsets (Atheros, some Realtek/Ralink).
+**Hard platform limits (unchanged):** macOS built-in card **can't inject** → needs a USB monitor-mode adapter; Windows standard drivers can't do monitor mode (scan-only); Linux works with injection-capable chipsets. These apply to mdk4/bettercap/wifite2 the same as to aircrack-ng.
 
 ---
 
-## 6. Packet capture & analysis (supporting)
+## 6. Traffic / flow analysis — net-new (supporting)
 
-| Library | Lang | Use |
+| Library | Lang | Why it's new/useful |
 |---|---|---|
-| **pyshark** | Python (tshark wrapper) | `pip install pyshark`; parse live/offline captures with Wireshark's dissectors |
-| **scapy** | Python | `sniff()`, `rdpcap()`, `wrpcap()` — capture, read, write pcap |
-| **dpkt** | Python | fast, low-level pcap parsing |
-| **libpcap / tcpdump** | C | the underlying capture engine (Npcap on Windows) |
-
-Useful for a "what is this device actually talking to" view once we can see its traffic (either on our own link or via the MITM layer).
+| **nfstream** | Python | Turns live traffic or a pcap into **flows with 90+ statistical features** (+ optional app/protocol ID). Ideal for a "what is this device actually talking to" view. `NFStreamer(source="en0")`. |
+| **pyshark** | Python | tshark wrapper — parse live/offline captures with **Wireshark's dissectors** (deep protocol decode) without reimplementing them. |
+| **p0f** | C | **Passive** OS/device fingerprinting from observed traffic — identify devices without sending a single probe. Stealthy, safe on your own LAN. |
+| **dpkt** | Python | Fast, low-level pcap parsing when we want speed over convenience. |
 
 ---
 
-## Recommended integration plan for NetworkRegulator
+## Recommended net-new additions (shortlist)
 
-1. **Discovery** — keep our portable socket/ARP sweep as the baseline; add **scapy `arping`** (richer, reliable) and **python-zeroconf** (friendly device names). **[builds on current `network_scanner_devices.py`]**
-2. **Ports** — keep the TCP connect scan; optionally shell out to **nmap `-sV`** for service/version when the user clicks a device. **[builds on `device_detail.py`]**
-3. **Vendor** — add **mac-vendor-lookup** (async) for a vendor column. Cheap, high-value, cross-platform.
-4. **Disconnect (wifi)** — keep **aircrack-ng**; document the macOS/Windows adapter requirement in the UI.
-5. **Router impersonation / route-through-me** — build on **bettercap** (REST API + a caplet), with a **scapy** fallback for portability. Always auto-restore ARP tables on stop, and gate the feature behind an explicit "I own/authorize this network" confirmation.
+1. **getmac** + **mac-vendor-lookup** — portable MAC + vendor column. Cheap, high value, cross-platform. *(start here)*
+2. **python-zeroconf** (+ UPnP) — friendly device names in the device list.
+3. **naabu** or **RustScan** — fast port sweep, handing to nmap `-sV` on click.
+4. **pywifi** (+ **CoreWLAN/pyobjc** on macOS) — scan/connect wifi from the GUI.
+5. **bettercap** — router-impersonation / MITM, driven via its REST API + a caplet; **mitmproxy** to act on the traffic.
+6. **mdk4** / **wifite2** — richer/automated deauth on top of our aircrack-ng base.
+7. **nfstream** — per-device traffic view.
+
+Gate anything in §4/§5 behind an explicit "I own / authorize this network" confirmation, and auto-restore state (ARP tables) on stop.
+
+---
+
+## Already in use (reference only — not the focus)
+
+| Task | Tool we already have |
+|---|---|
+| Device discovery | raw `socket` ping + ARP-table parse (`network_scanner_devices.py`) |
+| Port scanning | raw `socket` TCP connect scan (`device_detail.py`) |
+| Discovery/MITM primitives | **scapy** |
+| Wifi scan + deauth | **aircrack-ng** suite + macOS built-in tools |
+
+The net-new tools above are meant to *layer on top of* these, not replace them wholesale.
 
 ---
 
 ## Sources
-- bettercap — official docs & arpspoof module: https://www.bettercap.org/modules/ethernet/spoofers/arpspoof/ · repo https://github.com/bettercap/bettercap · Kali tool page https://www.kali.org/tools/bettercap
-- scapy ARP/ARP-spoof usage: https://packtpub.com/en-gb/product/python-for-security-and-networking-9781837637553 · scapy docs https://scapy.readthedocs.io
-- nmap / python-nmap / python-libnmap: https://nmap.org/book/man.html · https://pypi.org/project/python-nmap/ · https://pypi.org/project/python-libnmap/
-- masscan: https://github.com/robertdavidgraham/masscan
+- bettercap: https://www.bettercap.org/modules/ · https://github.com/bettercap/bettercap
+- naabu (ProjectDiscovery): https://github.com/projectdiscovery/naabu · https://docs.projectdiscovery.io/tools/naabu · RustScan: https://github.com/RustScan/RustScan · masscan: https://github.com/robertdavidgraham/masscan
+- getmac: https://pypi.org/project/getmac/ · pywifi: https://pypi.org/project/pywifi/ · CoreWLAN (pyobjc): https://developer.apple.com/documentation/corewlan
+- python-zeroconf: https://pypi.org/project/zeroconf/ · async-upnp-client: https://pypi.org/project/async-upnp-client/ · netdisco: https://pypi.org/project/netdisco/ · impacket: https://github.com/fortra/impacket
 - mac-vendor-lookup: https://pypi.org/project/mac-vendor-lookup/ · manuf: https://pypi.org/project/manuf/ · netaddr: https://pypi.org/project/netaddr/
-- python-zeroconf: https://pypi.org/project/zeroconf/ · netdisco: https://pypi.org/project/netdisco/
-- ettercap: https://www.ettercap-project.org · dsniff/arpspoof: https://www.monkey.org/~dugsong/dsniff/
-- mitmproxy: https://mitmproxy.org/
-- aircrack-ng: https://www.aircrack-ng.org · pyshark: https://pypi.org/project/pyshark/ · dpkt: https://pypi.org/project/dpkt/
+- mitmproxy: https://mitmproxy.org/ · Responder: https://github.com/SpiderLabs/Responder · dnschef: https://github.com/iphelix/dnschef · ettercap: https://www.ettercap-project.org · dsniff/arpspoof: https://www.monkey.org/~dugsong/dsniff/
+- mdk4: https://github.com/aircrack-ng/mdk4 · wifite2: https://github.com/kimocoder/wifite2 · airgeddon: https://github.com/v1s1t0r1sh3r3/airgeddon · kismet: https://www.kismetwireless.net/
+- nfstream: https://www.nfstream.org/ · pyshark: https://pypi.org/project/pyshark/ · p0f: https://lcamtuf.coredump.cx/p0f3/ · dpkt: https://pypi.org/project/dpkt/
 
-*Library capabilities above reflect each project's documented feature set; the two primary MITM tools (bettercap, scapy) were cross-checked against current docs during this research. Exact flag/function names should be re-confirmed against the installed version at implementation time.*
+*Capabilities reflect each project's documented feature set; naabu, getmac, pywifi, nfstream, Responder, mdk4/wifite2/airgeddon, and dnschef were cross-checked against current sources during this research. Exact flags/function names should be re-confirmed against the installed version at implementation time.*
