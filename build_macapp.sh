@@ -29,6 +29,9 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 
 cp netreg_backend.py network_scanner.py network_scanner_devices.py \
    device_detail.py recovery.py mac_native.py "$APP/Contents/Resources/"
+# Bundle the OUI (MAC -> manufacturer) database so vendor lookup works in the app.
+mkdir -p "$APP/Contents/Resources/data"
+cp data/oui_vendors.tsv.gz "$APP/Contents/Resources/data/"
 
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>

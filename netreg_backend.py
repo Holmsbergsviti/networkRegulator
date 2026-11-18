@@ -19,6 +19,7 @@ differs (airodump stations vs. a LAN scan).
 from __future__ import annotations
 
 import csv
+import gzip
 import ipaddress
 import os
 import re
@@ -145,6 +146,59 @@ def resolve_hostname(ip: str) -> str:
         return socket.gethostbyaddr(ip)[0]
     except Exception:
         return ""
+
+
+# --- MAC -> manufacturer, from the bundled IEEE OUI registry --------------- #
+_OUI_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                         "data", "oui_vendors.tsv.gz")
+_oui_cache: dict | None = None
+_oui_lock = threading.Lock()
+
+
+def _load_oui() -> dict:
+    """Load the bundled OUI prefix->vendor table once (lazy, cached)."""
+    global _oui_cache
+    if _oui_cache is not None:
+        return _oui_cache
+    with _oui_lock:
+        if _oui_cache is not None:
+            return _oui_cache
+        d: dict = {}
+        try:
+            with gzip.open(_OUI_PATH, "rt", encoding="utf-8", errors="ignore") as f:
+                for line in f:
+                    pfx, _, vendor = line.rstrip("\n").partition("\t")
+                    if pfx:
+                        d[pfx] = vendor
+        except Exception:
+            d = {}
+        _oui_cache = d
+        return d
+
+
+def vendor_for_mac(mac: str) -> str:
+    """Best-effort manufacturer for a MAC address, from the bundled IEEE OUI
+    data. Returns a vendor name, a note for randomized/private addresses, or ""
+    when it genuinely can't be identified."""
+    if not mac:
+        return ""
+    hexs = mac.replace(":", "").replace("-", "").upper()
+    if len(hexs) < 6:
+        return ""
+    vendor = _load_oui().get(hexs[:6], "")
+    if vendor and vendor.lower() != "private":
+        return vendor
+    # Locally-administered bit (bit 1 of the first octet) => a randomized or
+    # privately-assigned MAC. Modern phones randomize their MAC per network, so
+    # this is the honest reason they can't be identified by maker.
+    try:
+        if int(hexs[:2], 16) & 0x02:
+            return "Randomized / private MAC"
+    except Exception:
+        pass
+    if vendor.lower() == "private":
+        return "Private (unregistered)"
+    return ""
 
 
 class Capabilities:
@@ -561,7 +615,8 @@ class MacBackend(Backend):
             if dip in seen:
                 continue
             seen.add(dip)
-            rows.append({"IP": dip, "MAC": mac, "Hostname": ""})
+            rows.append({"IP": dip, "MAC": mac, "Vendor": vendor_for_mac(mac),
+                         "Hostname": ""})
 
         # best-effort reverse DNS, bounded so a slow resolver can't hang the scan
         if rows:
@@ -590,10 +645,13 @@ class MacBackend(Backend):
                 except Exception:
                     self._mdns_cache = {}
             for r in rows:
-                try:
-                    r["Vendor"] = integrations.vendor_for_mac(r.get("MAC", ""))
-                except Exception:
-                    r["Vendor"] = ""
+                # Vendor is already set from the bundled IEEE OUI table above;
+                # only fall back to the optional libs when it came back blank.
+                if not r.get("Vendor"):
+                    try:
+                        r["Vendor"] = integrations.vendor_for_mac(r.get("MAC", ""))
+                    except Exception:
+                        r["Vendor"] = ""
                 if not r.get("Hostname"):
                     fn = self._mdns_cache.get(r["IP"], "")
                     if fn:
@@ -827,7 +885,7 @@ class LinuxBackend(Backend):
                         continue
                     devices.append({
                         "Station MAC": smac, "BSSID": get("BSSID"),
-                        "Vendor": (integrations.vendor_for_mac(smac) if integrations else ""),
+                        "Vendor": vendor_for_mac(smac),
                         "Packets": get("# packets"), "PWR": get("Power"),
                         "Probed ESSIDs": get("Probed ESSIDs"),
                     })

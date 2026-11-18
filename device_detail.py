@@ -14,7 +14,8 @@ import threading
 import tkinter as tk
 from tkinter import ttk
 
-from netreg_backend import scan_ports, service_name, ping_host, resolve_hostname
+from netreg_backend import (scan_ports, service_name, ping_host,
+                            resolve_hostname, vendor_for_mac)
 
 try:
     import netreg_integrations as integrations
@@ -46,13 +47,7 @@ class DeviceDetailUI(tk.Tk):
 
         self.vars["IP"].set(IP or "(unknown)")
         self.vars["MAC"].set(MAC or "—")
-        vendor = ""
-        if integrations is not None and MAC:
-            try:
-                vendor = integrations.vendor_for_mac(MAC)
-            except Exception:
-                vendor = ""
-        self.vars["Vendor"].set(vendor or "—")
+        self.vars["Vendor"].set(vendor_for_mac(MAC) or "unknown" if MAC else "—")
         self.vars["Hostname"].set(HOSTNAME or "…")
         self.vars["Reachable"].set("checking…")
 
@@ -126,8 +121,12 @@ class DeviceDetailUI(tk.Tk):
             else:
                 scan_ports(IP, on_open=on_open)
                 scanner = "common ports"
-            msg = (f"Scan complete ({scanner}) — {found['n']} open port(s)."
-                   if found["n"] else f"Scan complete ({scanner}) — none open.")
+            if found["n"]:
+                msg = f"Scan complete ({scanner}) — {found['n']} open port(s)."
+            else:
+                msg = ("Scan complete — no common ports open. That's normal for "
+                       "phones, laptops and most IoT devices, which don't run "
+                       "services you can connect to.")
         except Exception as e:
             msg = f"Scan error: {e}"
         self.after(0, self._scan_done, msg)
