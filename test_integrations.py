@@ -66,6 +66,26 @@ try:
 except Exception as e:
     check(f"mdns_names raised {e}", False)
 
+print("netreg_mitm (command construction only, nothing launched):")
+import netreg_mitm as mitm
+check("eval targets the IP + spoofs gateway",
+      mitm.build_eval("192.168.1.211") ==
+      "set arp.spoof.targets 192.168.1.211; set arp.spoof.fullduplex true; net.probe on; arp.spoof on")
+check("sniff flag adds net.sniff", "net.sniff on" in mitm.build_eval("10.0.0.5", sniff=True))
+check("fullduplex false honored", "fullduplex false" in mitm.build_eval("10.0.0.5", full_duplex=False))
+check("argv carries -iface and -eval",
+      mitm.build_argv("10.0.0.9", iface="en0")[1:3] == ["-iface", "en0"] and
+      "-eval" in mitm.build_argv("10.0.0.9", iface="en0"))
+def _empty_refused():
+    try:
+        mitm.build_eval("   "); return False
+    except ValueError:
+        return True
+check("empty target refused (no subnet-wide spoof)", _empty_refused())
+check("mac admin wrapper uses osascript", mitm._mac_admin_command(["bettercap"])[0] == "osascript")
+ok, msg = mitm.RouteSession().start("192.168.1.5")
+check("start refuses cleanly without bettercap", ok is False and "bettercap" in msg.lower())
+
 print()
 if fails:
     print(f"{len(fails)}/{double} FAILED: {fails}")

@@ -39,41 +39,51 @@ The devices window and device-detail window render whatever columns the active
 backend reports, so the **Vendor** column appears automatically on macOS (LAN
 scan) and Linux (airodump stations).
 
-## What's probed but not yet active (Layer 3 — own-network only)
+## Layer 3 — active tools (own-network / authorized only)
 
-`availability()` already reports these so the GUI can show what's installed and
-plan the next step. They are **active / intrusive** tools, lawful only on a
-network you own or are authorized to test, and will be gated behind an explicit
-confirmation when wired up:
+These are **active / intrusive** and lawful only on a network you own or are
+authorized to test. They are gated in the UI behind an explicit confirmation.
 
-- **pywifi** — scan / connect-disconnect this machine's Wi-Fi
-- **bettercap** — ARP-spoof / gateway impersonation + MITM (via its REST API)
-- **mitmproxy** — inspect / modify redirected HTTP(S)
-- **mdk4 / wifite2** — richer / automated deauth on top of aircrack-ng
+- **bettercap — route a device's traffic through this machine (WIRED IN).**
+  `netreg_mitm.py` drives bettercap's `arp.spoof` to impersonate the gateway;
+  `mitm_window.py` is the UI (opened from the devices window via **"Route via
+  this Mac"**). The Start button stays disabled until you tick the
+  "I own/authorized" box; closing the window restores the ARP tables. bettercap
+  needs root, so on macOS it launches through the system password prompt.
+- **pywifi** — installed + probed; scan / connect-disconnect this machine's Wi-Fi
+  (UI not wired yet).
+- **mitmproxy** — installed + probed; inspect / modify redirected HTTP(S)
+  (pairs with the bettercap route above).
+- **mdk4 / wifite2** — richer / automated deauth. Note **mdk4 is Linux-only**
+  (not in Homebrew); on macOS deauth goes through aircrack-ng's `aireplay-ng`.
 
-## Enabling the optional libraries
+## Enabling everything (one click)
+
+**`run.command` installs everything on the first run** — double-click it in
+Finder and it will: pip-install the Python libraries (getmac, mac-vendor-lookup,
+zeroconf, scapy, pywifi, mitmproxy, pyobjc), download the IEEE vendor database,
+and `brew install` the command-line tools (aircrack-ng, bettercap, nmap, naabu,
+rustscan). Later runs skip whatever's already installed. If Homebrew is missing
+it prints the one-line install command and launches anyway.
+
+To do it by hand instead:
 
 ```bash
-# Layer 1 (recommended; pure Python, cross-platform)
-pip install -r requirements.txt      # getmac, mac-vendor-lookup, zeroconf
-
-# Layer 2 fast scanners (external binaries)
-brew install naabu rustscan nmap     # macOS (use your package manager elsewhere)
-
-# Layer 3 active tools (own-network/authorized only)
-brew install bettercap mdk4 aircrack-ng
+pip install -r requirements.txt      # Layer 1 Python libs
+brew install aircrack-ng bettercap nmap naabu rustscan
 pip install pywifi mitmproxy
 ```
 
-`mac-vendor-lookup` downloads the IEEE OUI database on first use (needs network
-once); until then, the bundled `netreg_oui.py` table covers common vendors
-offline.
+Two things no installer can provide: a **monitor-mode USB adapter** (hardware,
+needed for Wi-Fi deauth on macOS), and **Homebrew** itself (install once from
+https://brew.sh). `mac-vendor-lookup` downloads the IEEE OUI database on first
+use; until then the bundled `netreg_oui.py` table covers common vendors offline.
 
 ## Verifying
 
 ```bash
 python3 netreg_integrations.py   # prints what's available + sample lookups
-python3 test_integrations.py     # 25 offline unit checks (OUI table, enrichment, fallbacks)
+python3 test_integrations.py     # 32 offline unit checks (OUI table, enrichment, fallbacks, MITM command build)
 python3 netreg_backend.py        # backend self-check (parsers only, no Wi-Fi needed)
 ```
 
