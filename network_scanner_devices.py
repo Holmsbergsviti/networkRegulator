@@ -5,6 +5,7 @@ Launched by the main window as:  python network_scanner_devices.py ESSID BSSID C
 Shows the devices the active backend can see for that network, and (where the
 platform supports it) lets you disconnect one or all of them.
 """
+import subprocess
 import sys
 import threading
 import tkinter as tk
@@ -50,8 +51,9 @@ class DevicesUI(tk.Tk):
         for col in self.columns:
             self.tree.heading(col, text=col)
             self.tree.column(col, width=200, anchor="w")
+        self.tree.bind("<Double-1>", self.on_double_click)
 
-        foot = self.caps.device_note
+        foot = self.caps.device_note + "  Double-click a device for its details and open ports."
         if not self.caps.can_deauth:
             foot += "  The Disconnect button is off: " + self.caps.deauth_note
         ttk.Label(self, text=foot, foreground="gray", wraplength=960,
@@ -92,6 +94,19 @@ class DevicesUI(tk.Tk):
                 self.tree.insert("", "end", values=tuple(r.get(c, "") for c in self.columns))
             self.set_status(note)
         self.after(REFRESH_MS, self.refresh_table)
+
+    def on_double_click(self, _event=None):
+        sel = self.tree.selection()
+        if not sel:
+            return
+        row = dict(zip(self.columns, self.tree.item(sel[0], "values")))
+        ip = row.get("IP", "")
+        mac = row.get("MAC") or row.get("Station MAC") or ""
+        hostname = row.get("Hostname", "")
+        if not ip and not mac:
+            return
+        # Open the device-detail window (info + open-ports scan) as its own process.
+        subprocess.Popen([sys.executable, "device_detail.py", ip, mac, hostname])
 
     def _selected_station(self):
         sel = self.tree.selection()

@@ -61,6 +61,84 @@ def _empty_net(**kw) -> dict:
     return row
 
 
+# Common TCP ports probed by the device-detail window, with a friendly service
+# name. getservbyport fills in the rest where the OS knows it.
+COMMON_PORTS = {
+    20: "ftp-data", 21: "ftp", 22: "ssh", 23: "telnet", 25: "smtp", 53: "dns",
+    80: "http", 110: "pop3", 111: "rpcbind", 123: "ntp", 135: "msrpc",
+    139: "netbios", 143: "imap", 161: "snmp", 389: "ldap", 443: "https",
+    445: "smb", 515: "printer", 548: "afp", 554: "rtsp", 587: "smtp-sub",
+    631: "ipp", 993: "imaps", 995: "pop3s", 1433: "mssql", 1723: "pptp",
+    1883: "mqtt", 3306: "mysql", 3389: "rdp", 5000: "upnp/flask", 5353: "mdns",
+    5432: "postgres", 5900: "vnc", 6379: "redis", 7000: "airplay",
+    8008: "http-alt", 8009: "chromecast", 8080: "http-alt", 8443: "https-alt",
+    8883: "mqtt-tls", 9100: "printer-jd", 32400: "plex", 49152: "upnp",
+}
+
+
+def service_name(port: int) -> str:
+    """Best-effort service label for a TCP port."""
+    try:
+        return socket.getservbyport(port, "tcp")
+    except Exception:
+        return COMMON_PORTS.get(port, "")
+
+
+def scan_ports(ip: str, ports=None, timeout: float = 0.6, on_open=None) -> list[int]:
+    """Plain TCP connect-scan of `ip`. Works on any platform (sockets only), so
+    it lives outside the per-OS backends. Calls on_open(port) as each open port
+    is found and returns the sorted list of open ports. Own-network use only."""
+    ports = list(ports if ports is not None else COMMON_PORTS.keys())
+    open_ports: list[int] = []
+
+    def check(p: int):
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.settimeout(timeout)
+        try:
+            return p, s.connect_ex((ip, p)) == 0
+        except Exception:
+            return p, False
+        finally:
+            try:
+                s.close()
+            except Exception:
+                pass
+
+    with ThreadPoolExecutor(max_workers=100) as ex:
+        for p, is_open in ex.map(check, ports):
+            if is_open:
+                open_ports.append(p)
+                if on_open:
+                    try:
+                        on_open(p)
+                    except Exception:
+                        pass
+    return sorted(open_ports)
+
+
+def ping_host(ip: str, timeout_s: int = 1) -> tuple[bool, str]:
+    """One ICMP ping, cross-platform. Returns (reachable, latency_text)."""
+    if current_os() == "windows":
+        cmd = ["ping", "-n", "1", "-w", str(timeout_s * 1000), ip]
+    else:
+        cmd = ["ping", "-c", "1", "-t", str(timeout_s), ip]
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout_s + 2)
+    except Exception:
+        return False, ""
+    if r.returncode != 0:
+        return False, ""
+    m = re.search(r"time[=<]\s*([\d.]+)\s*ms", r.stdout)
+    return True, (f"{m.group(1)} ms" if m else "reachable")
+
+
+def resolve_hostname(ip: str) -> str:
+    try:
+        return socket.gethostbyaddr(ip)[0]
+    except Exception:
+        return ""
+
+
 class Capabilities:
     """What the active backend can actually do on this machine, and why not."""
 
