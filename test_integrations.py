@@ -96,6 +96,33 @@ check("mac admin wrapper uses osascript", mitm._mac_admin_command(["bettercap"])
 ok, msg = mitm.RouteSession().start("192.168.1.5")
 check("start refuses cleanly without bettercap", ok is False and "bettercap" in msg.lower())
 
+print("netreg_traffic (sniff-log parsing + grouping):")
+import netreg_traffic as nt
+_L = "[00:13:16] [net.sniff.udp] udp 192.178.24.10:https > host.local.:53273 180 bytes"
+p = nt.parse_line(_L)
+check("parse_line extracts proto/host/bytes",
+      p and p["proto"] == "udp" and p["src"] == "192.178.24.10" and p["bytes"] == 180)
+check("parse_line strips trailing dot from .local", p and p["dst"] == "host.local")
+check("non-packet line -> None", nt.parse_line("[x] mdns host.local. : PTR query") is None)
+check("public IP detected", nt._is_public_ip("17.8.136.52") is True)
+check("private IP not public", nt._is_public_ip("192.168.1.241") is False)
+check("hostname not public", nt._is_public_ip("host.local") is False)
+check("remote endpoint is the public side",
+      nt.remote_endpoint(nt.parse_line(_L)) == ("192.178.24.10", "https"))
+_s = nt.TrafficSummary()
+_s.add_line(_L)
+_s.add_line("[00:13:16] [net.sniff.udp] udp host.local.:53273 > 192.178.24.10:https 43 bytes")
+_s.add_line("[00:13:19] [net.sniff.tcp] tcp 17.8.136.52:https > host.local.:51983 56 bytes")
+_s.add_line("[00:13:22] [net.sniff.mdns] mdns host.local. : PTR query for _hap._tcp.local")
+rws = _s.rows()
+check("groups both directions of one host into one row",
+      any(r["host"] == "192.178.24.10" and r["packets"] == 2 and r["bytes"] == 223 for r in rws))
+check("mdns/local lines are not counted as remote traffic", len(rws) == 2)
+check("rows sorted busiest-first by bytes", rws[0]["bytes"] >= rws[-1]["bytes"])
+check("set_name/label resolves a host to its name",
+      (_s.set_name("17.8.136.52", "apple.com") or _s.label("17.8.136.52")) == "apple.com")
+check("human_bytes formats KB", nt.human_bytes(2048) == "2.0 KB")
+
 print()
 if fails:
     print(f"{len(fails)}/{double} FAILED: {fails}")

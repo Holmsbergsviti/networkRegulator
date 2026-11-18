@@ -17,7 +17,10 @@ import threading
 import tkinter as tk
 from tkinter import ttk, messagebox
 
+import socket
+
 import netreg_mitm as mitm
+import netreg_traffic as nt
 
 # Strip terminal colour / control sequences bettercap writes, so the pane shows
 # clean text.
@@ -37,6 +40,8 @@ class MitmUI(tk.Tk):
         self.busy = False
         self._tailing = False
         self._tail_pos = 0
+        self.summary = nt.TrafficSummary(IP or None)
+        self._resolving = set()  # remote IPs a lookup thread is already working
 
         # --- authorization banner ----------------------------------------- #
         banner = tk.Label(
@@ -81,21 +86,46 @@ class MitmUI(tk.Tk):
         ttk.Label(self, textvariable=self.status_var, wraplength=560,
                   justify="left", foreground="gray").pack(fill="x", padx=12, pady=(6, 6))
 
-        # --- live traffic summary pane ------------------------------------- #
-        traffic = ttk.LabelFrame(self, text="Redirected traffic (live summary)")
-        traffic.pack(fill="both", expand=True, padx=12, pady=(0, 8))
-        self.traffic_text = tk.Text(traffic, height=12, wrap="none",
+        # --- live traffic pane: grouped summary + raw toggle --------------- #
+        traffic = ttk.LabelFrame(self, text="Redirected traffic")
+        traffic.pack(fill="both", expand=True, padx=12, pady=(0, 4))
+
+        # grouped summary table (default view)
+        cols = ("server", "packets", "data", "proto", "ports")
+        self.tree = ttk.Treeview(traffic, columns=cols, show="headings", height=11)
+        for c, text, w, anchor in (
+            ("server", "Server (the device talked to)", 300, "w"),
+            ("packets", "Packets", 70, "e"),
+            ("data", "Data", 80, "e"),
+            ("proto", "Proto", 70, "center"),
+            ("ports", "Ports", 90, "w"),
+        ):
+            self.tree.heading(c, text=text)
+            self.tree.column(c, width=w, anchor=anchor)
+        self.tree_vsb = ttk.Scrollbar(traffic, orient="vertical",
+                                      command=self.tree.yview)
+        self.tree.configure(yscrollcommand=self.tree_vsb.set)
+
+        # raw per-packet log (hidden until toggled)
+        self.traffic_text = tk.Text(traffic, height=11, wrap="none",
                                     state="disabled", font=("Menlo", 11),
                                     background="#111317", foreground="#d6dde6")
-        vsb = ttk.Scrollbar(traffic, orient="vertical",
-                            command=self.traffic_text.yview)
-        self.traffic_text.configure(yscrollcommand=vsb.set)
-        vsb.pack(side="right", fill="y")
-        self.traffic_text.pack(side="left", fill="both", expand=True)
-        self._set_traffic("Start routing with the capture box ticked to see a "
-                           "live summary of this device's traffic here "
-                           "(domains it contacts, DNS lookups, and plain-HTTP "
-                           "requests). HTTPS contents stay encrypted.\n")
+        self.text_vsb = ttk.Scrollbar(traffic, orient="vertical",
+                                      command=self.traffic_text.yview)
+        self.traffic_text.configure(yscrollcommand=self.text_vsb.set)
+
+        self._show_summary()  # pack the table
+
+        bottom = ttk.Frame(self); bottom.pack(fill="x", padx=12, pady=(0, 8))
+        self.show_raw = tk.BooleanVar(value=False)
+        ttk.Checkbutton(bottom, text="Show raw packets instead of the grouped summary",
+                        variable=self.show_raw, command=self._toggle_view).pack(anchor="w")
+        self.hint_var = tk.StringVar(
+            value=("Start routing to see which servers this device talks to. "
+                   "HTTPS stays encrypted, so you'll see the servers and how "
+                   "much data — not page contents."))
+        ttk.Label(self, textvariable=self.hint_var, wraplength=580,
+                  justify="left", foreground="gray").pack(fill="x", padx=12, pady=(0, 8))
 
         ready, msg = mitm.preflight()
         self._ready = ready and bool(IP)
@@ -108,20 +138,75 @@ class MitmUI(tk.Tk):
 
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
-    def _set_traffic(self, text):
-        """Replace the whole traffic pane (used for hints)."""
-        self.traffic_text.config(state="normal")
-        self.traffic_text.delete("1.0", "end")
-        self.traffic_text.insert("end", text)
-        self.traffic_text.config(state="disabled")
+    def _show_summary(self):
+        self.traffic_text.pack_forget()
+        self.text_vsb.pack_forget()
+        self.tree_vsb.pack(side="right", fill="y")
+        self.tree.pack(side="left", fill="both", expand=True)
 
-    def _append_traffic(self, text):
+    def _show_raw(self):
+        self.tree.pack_forget()
+        self.tree_vsb.pack_forget()
+        self.text_vsb.pack(side="right", fill="y")
+        self.traffic_text.pack(side="left", fill="both", expand=True)
+
+    def _toggle_view(self):
+        if self.show_raw.get():
+            self._show_raw()
+        else:
+            self._show_summary()
+
+    def _append_raw(self, text):
         at_end = self.traffic_text.yview()[1] >= 0.999
         self.traffic_text.config(state="normal")
         self.traffic_text.insert("end", text)
+        # keep the raw buffer from growing without bound
+        if int(self.traffic_text.index("end-1c").split(".")[0]) > 4000:
+            self.traffic_text.delete("1.0", "2000.0")
         self.traffic_text.config(state="disabled")
         if at_end:
             self.traffic_text.see("end")
+
+    def _render_summary(self):
+        rows = self.summary.rows()
+        self.tree.delete(*self.tree.get_children())
+        total = 0
+        for r in rows:
+            total += r["packets"]
+            server = r["name"] or r["host"]
+            if r["name"]:
+                server = f"{r['name']}  ({r['host']})"
+            self.tree.insert("", "end", values=(
+                server, r["packets"], nt.human_bytes(r["bytes"]),
+                r["protos"], r["ports"]))
+        if rows:
+            self.hint_var.set(
+                f"{len(rows)} server(s), {total} packets so far. HTTPS stays "
+                f"encrypted — you see who the device talks to and how much, "
+                f"not page contents.")
+
+    def _resolve_names(self):
+        """Kick off reverse-DNS for any remote IP we haven't named yet, on a
+        background thread so the UI never blocks."""
+        for host in self.summary.hosts_without_names():
+            if host in self._resolving:
+                continue
+            self._resolving.add(host)
+
+            def lookup(h=host):
+                name = ""
+                try:
+                    old = socket.getdefaulttimeout()
+                    socket.setdefaulttimeout(1.5)
+                    try:
+                        name = socket.gethostbyaddr(h)[0]
+                    finally:
+                        socket.setdefaulttimeout(old)
+                except Exception:
+                    name = ""
+                # record even an empty result so we don't retry forever
+                self.after(0, lambda: self.summary.set_name(h, name or h))
+            threading.Thread(target=lookup, daemon=True).start()
 
     def _start_tailing(self):
         """Begin following the session's traffic log into the pane."""
@@ -129,7 +214,8 @@ class MitmUI(tk.Tk):
             return
         self._tailing = True
         self._tail_pos = 0
-        self._set_traffic("")  # clear the hint
+        self.summary = nt.TrafficSummary(IP or None)
+        self.tree.delete(*self.tree.get_children())
         self.after(500, self._poll_log)
 
     def _stop_tailing(self):
@@ -146,7 +232,11 @@ class MitmUI(tk.Tk):
                     chunk = f.read()
                     self._tail_pos = f.tell()
                 if chunk:
-                    self._append_traffic(_ANSI.sub("", chunk))
+                    clean = _ANSI.sub("", chunk)
+                    self.summary.add_text(clean)
+                    self._append_raw(clean)
+                    self._resolve_names()
+                    self._render_summary()
             except Exception:
                 pass
         self.after(700, self._poll_log)
