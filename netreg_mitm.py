@@ -24,11 +24,22 @@ import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 import threading
 
 
 def bettercap_path() -> str:
     return shutil.which("bettercap") or ""
+
+
+def default_log_path() -> str:
+    """Where bettercap's sniffed-traffic summary is written so the GUI can tail
+    it. ~/Library/Logs on macOS (readable by the user, writable by the root
+    bettercap process), the system temp dir elsewhere."""
+    mac_logs = os.path.join(os.path.expanduser("~"), "Library", "Logs")
+    if sys.platform == "darwin" and os.path.isdir(mac_logs):
+        return os.path.join(mac_logs, "NetworkRegulator-traffic.log")
+    return os.path.join(tempfile.gettempdir(), "netreg_traffic.log")
 
 
 def available() -> bool:
@@ -60,7 +71,13 @@ def build_eval(target_ip: str, full_duplex: bool = True,
         "arp.spoof on",
     ]
     if sniff:
-        cmds.append("net.sniff on")
+        # Keep the summary readable: verbose events, limited to the target's
+        # own traffic (a BPF host filter) so the pane isn't flooded.
+        cmds += [
+            "set net.sniff.verbose true",
+            f"set net.sniff.filter host {target_ip}",
+            "net.sniff on",
+        ]
     return "; ".join(cmds)
 
 
@@ -75,12 +92,20 @@ def build_argv(target_ip: str, iface: str | None = None,
     return argv
 
 
-def _mac_admin_command(argv: list[str]) -> list[str]:
+def _sh_quote(s: str) -> str:
+    """Single-quote a string for the /bin/sh that osascript runs."""
+    return "'" + s.replace("'", "'\\''") + "'"
+
+
+def _mac_admin_command(argv: list[str], log_path: str | None = None) -> list[str]:
     """Wrap argv so macOS shows a GUI password prompt (osascript). The spoof
-    runs in the background; `stop()` kills it by name."""
-    # quote each arg for the shell that osascript runs
-    quoted = " ".join("'" + a.replace("'", "'\\''") + "'" for a in argv)
-    script = f'do shell script "{quoted} &> /dev/null &" with administrator privileges'
+    runs in the background; `stop()` kills it by name. When `log_path` is given,
+    bettercap's output is redirected there so the GUI can show the traffic
+    summary; otherwise it's discarded."""
+    quoted = " ".join(_sh_quote(a) for a in argv)
+    redirect = f"&> {_sh_quote(log_path)}" if log_path else "&> /dev/null"
+    script = (f'do shell script "{quoted} {redirect} &" '
+              f'with administrator privileges')
     return ["osascript", "-e", script]
 
 
@@ -95,6 +120,10 @@ class RouteSession:
         self._proc: subprocess.Popen | None = None
         self._target = ""
         self._lock = threading.Lock()
+        # Set while sniffing: the file bettercap writes its traffic summary to,
+        # which the GUI tails. None when capture is off.
+        self.log_path: str | None = None
+        self._logf = None
 
     def is_running(self) -> bool:
         with self._lock:
@@ -114,28 +143,54 @@ class RouteSession:
         except ValueError as e:
             return False, str(e)
 
+        # When capturing, give bettercap a log file to write to and start it
+        # empty so the GUI only sees this session's traffic.
+        self.log_path = default_log_path() if sniff else None
+        if self.log_path:
+            try:
+                open(self.log_path, "w").close()
+            except Exception:
+                self.log_path = None
+
         if sys.platform == "darwin":
-            launch = _mac_admin_command(argv)  # GUI password prompt
+            launch = _mac_admin_command(argv, self.log_path)  # GUI password prompt
+            popen_out = subprocess.DEVNULL  # bettercap output goes to log_path
         else:
             launch = ["sudo"] + argv
+            if self.log_path:
+                try:
+                    self._logf = open(self.log_path, "a")
+                    popen_out = self._logf
+                except Exception:
+                    self._logf = None
+                    popen_out = subprocess.DEVNULL
+            else:
+                popen_out = subprocess.DEVNULL
 
         try:
             # On macOS the osascript wrapper backgrounds bettercap itself and
             # returns immediately; elsewhere we hold the sudo child handle.
-            self._proc = subprocess.Popen(launch, stdout=subprocess.DEVNULL,
-                                          stderr=subprocess.DEVNULL)
+            self._proc = subprocess.Popen(launch, stdout=popen_out,
+                                          stderr=popen_out)
             self._target = target_ip
         except Exception as e:
             return False, f"Could not start bettercap: {e}"
+        tail = (" Traffic summary will appear below." if self.log_path else "")
         return True, (f"Routing {target_ip}'s traffic through this machine "
                       f"(impersonating the gateway). Press Stop to restore the "
-                      f"network.")
+                      f"network.{tail}")
 
     def stop(self) -> tuple[bool, str]:
         """Stop spoofing and restore the network."""
         with self._lock:
             proc = self._proc
             self._proc = None
+        if self._logf is not None:
+            try:
+                self._logf.close()
+            except Exception:
+                pass
+            self._logf = None
         # terminate the handle we hold (sudo path)
         if proc is not None and proc.poll() is None:
             try:
