@@ -31,6 +31,14 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 
+# Optional net-new library integrations (vendor lookup, mDNS names, fast scan).
+# Best-effort import so the backend still works if the module/libs are absent;
+# every helper degrades to "" / no-op in that case.
+try:
+    import netreg_integrations as integrations
+except Exception:
+    integrations = None
+
 NETWORK_COLUMNS = (
     "ESSID", "PWR", "CH", "Band", "Privacy", "Cipher", "Auth", "BSSID", "Beacons", "IV",
 )
@@ -515,6 +523,7 @@ class MacBackend(Backend):
     def start_devices(self, target: dict):
         self._dev_target = target or {}
         self._dev_scanning = True
+        self._mdns_cache = {}  # re-browse mDNS once per scan session
         with self._lock:
             self._dev_note = "Scanning the local network… (pinging every address, ~10–15s)"
         if self._dev_thread and self._dev_thread.is_alive():
@@ -626,6 +635,30 @@ class MacBackend(Backend):
                 list(ex.map(resolve, rows))
         finally:
             socket.setdefaulttimeout(old_timeout)
+
+        # Enrich with vendor (built-in OUI table + optional libs) and mDNS
+        # friendly names. All optional and offline-safe; blank when unavailable.
+        if integrations is not None:
+            if not getattr(self, "_mdns_cache", None):
+                try:
+                    self._mdns_cache = integrations.mdns_names(3.0)
+                except Exception:
+                    self._mdns_cache = {}
+            for r in rows:
+                # Vendor is already set from the bundled IEEE OUI table above;
+                # only fall back to the optional libs when it came back blank.
+                if not r.get("Vendor"):
+                    try:
+                        r["Vendor"] = integrations.vendor_for_mac(r.get("MAC", ""))
+                    except Exception:
+                        r["Vendor"] = ""
+                if not r.get("Hostname"):
+                    fn = self._mdns_cache.get(r["IP"], "")
+                    if fn:
+                        r["Hostname"] = fn
+        else:
+            for r in rows:
+                r.setdefault("Vendor", "")
 
         rows.sort(key=lambda r: tuple(int(x) for x in r["IP"].split(".")))
         note = f"{len(rows)} device(s) on {net.with_prefixlen} (via {iface})."
@@ -746,7 +779,7 @@ class LinuxBackend(Backend):
         self._net_proc = None
 
     def device_columns(self) -> tuple[str, ...]:
-        return ("Station MAC", "BSSID", "Packets", "PWR", "Probed ESSIDs")
+        return ("Station MAC", "BSSID", "Vendor", "Packets", "PWR", "Probed ESSIDs")
 
     def start_devices(self, target: dict):
         self._dev_target = target or {}
@@ -852,6 +885,7 @@ class LinuxBackend(Backend):
                         continue
                     devices.append({
                         "Station MAC": smac, "BSSID": get("BSSID"),
+                        "Vendor": vendor_for_mac(smac),
                         "Packets": get("# packets"), "PWR": get("Power"),
                         "Probed ESSIDs": get("Probed ESSIDs"),
                     })

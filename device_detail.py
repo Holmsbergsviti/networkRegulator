@@ -17,6 +17,11 @@ from tkinter import ttk
 from netreg_backend import (scan_ports, service_name, ping_host,
                             resolve_hostname, vendor_for_mac)
 
+try:
+    import netreg_integrations as integrations
+except Exception:
+    integrations = None
+
 IP = sys.argv[1] if len(sys.argv) > 1 else ""
 MAC = sys.argv[2] if len(sys.argv) > 2 else ""
 HOSTNAME = sys.argv[3] if len(sys.argv) > 3 else ""
@@ -103,9 +108,21 @@ class DeviceDetailUI(tk.Tk):
             self.after(0, self._add_port, port)
 
         try:
-            scan_ports(IP, on_open=on_open)
+            fast = None
+            if integrations is not None:
+                try:
+                    fast = integrations.fast_port_scan(IP)
+                except Exception:
+                    fast = None
+            if fast is not None:
+                for port in fast:
+                    on_open(port)
+                scanner = "fast scanner"
+            else:
+                scan_ports(IP, on_open=on_open)
+                scanner = "common ports"
             if found["n"]:
-                msg = f"Scan complete — {found['n']} open port(s)."
+                msg = f"Scan complete ({scanner}) — {found['n']} open port(s)."
             else:
                 msg = ("Scan complete — no common ports open. That's normal for "
                        "phones, laptops and most IoT devices, which don't run "
