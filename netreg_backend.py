@@ -31,6 +31,8 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 
+from netreg_seen import SeenTracker
+
 # Optional net-new library integrations (vendor lookup, mDNS names, fast scan).
 # Best-effort import so the backend still works if the module/libs are absent;
 # every helper degrades to "" / no-op in that case.
@@ -279,6 +281,11 @@ class MacBackend(Backend):
         self._dev_scanning = False
         self._dev_target: dict = {}
 
+        # Keep scan results steady across the repeated sweeps so networks and
+        # sleeping devices don't flicker in and out of the list.
+        self._net_seen = SeenTracker(ttl=20.0, keys=("BSSID", "ESSID"))
+        self._dev_seen = SeenTracker(ttl=30.0, keys=("MAC", "IP"))
+
         self._has_aircrack = bool(shutil.which("airodump-ng") and shutil.which("aireplay-ng"))
 
     # ---- display helpers -------------------------------------------------- #
@@ -356,6 +363,7 @@ class MacBackend(Backend):
     # ---- network scanning ------------------------------------------------- #
     def start_scan(self):
         self._scanning = True
+        self._net_seen.reset()  # fresh scan: don't carry over the last session
         # Set an immediate "working" note so the UI shows activity before the
         # first (heavy) scan pass returns, instead of the stale previous note.
         with self._lock:
@@ -368,6 +376,9 @@ class MacBackend(Backend):
     def _scan_loop(self):
         while self._scanning:
             rows, note = self._scan_once()
+            # Merge across sweeps so a network that misses one pass doesn't
+            # vanish and reappear; keep the strongest-signal order.
+            rows = sorted(self._net_seen.update(rows), key=_pwr, reverse=True)
             with self._lock:
                 self._nets = rows
                 self._net_note = note
@@ -523,6 +534,7 @@ class MacBackend(Backend):
     def start_devices(self, target: dict):
         self._dev_target = target or {}
         self._dev_scanning = True
+        self._dev_seen.reset()  # fresh scan: don't carry over the last session
         self._mdns_cache = {}  # re-browse mDNS once per scan session
         with self._lock:
             self._dev_note = "Scanning the local network… (pinging every address, ~10–15s)"
@@ -534,6 +546,14 @@ class MacBackend(Backend):
     def _dev_loop(self):
         while self._dev_scanning:
             rows, note = self._lan_scan()
+            # Merge across sweeps so a device that didn't answer this round (a
+            # phone with its radio asleep) stays listed instead of flickering.
+            rows = self._dev_seen.update(rows)
+            rows.sort(key=lambda r: tuple(int(x) for x in r["IP"].split("."))
+                      if r.get("IP") else (0,))
+            if rows:
+                note = (f"{len(rows)} device(s) on the network "
+                        f"(kept for ~30s so nothing flickers).")
             with self._lock:
                 self._devices = rows
                 self._dev_note = note
