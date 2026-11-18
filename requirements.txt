@@ -1,0 +1,25 @@
+# NetworkRegulator — OPTIONAL enhancement libraries.
+#
+# The app runs fully WITHOUT any of these: it falls back to the built-in socket
+# port scan, the ARP-table device list, and the bundled OUI vendor table
+# (netreg_oui.py). Install these to unlock richer, net-new features. Each is
+# detected at runtime by netreg_integrations.availability(); nothing here is
+# imported unless it's present.
+
+# --- Layer 1: device enrichment (pure Python, cross-platform) ---------------
+getmac>=0.9.0            # MAC address for a host IP / local interface
+mac-vendor-lookup>=0.1.12  # full IEEE OUI vendor names (downloads the DB on first use)
+zeroconf>=0.130.0       # mDNS / Bonjour friendly device names
+
+# --- Layer 1 (optional offline vendor DB) -----------------------------------
+# manuf                 # offline OUI table; may need build tools on Python 3.13+
+
+# --- Layer 3: active tools — OWN-NETWORK / AUTHORIZED USE ONLY ---------------
+# These also require the matching system binaries (installed separately, e.g.
+# `brew install bettercap mdk4 aircrack-ng`), and are gated in the UI.
+# pywifi                # scan / connect-disconnect this machine's Wi-Fi
+# mitmproxy             # inspect / modify redirected HTTP(S) traffic
+
+# --- Layer 2: fast scanners are external binaries, not pip packages ----------
+# naabu / rustscan / masscan / nmap — install via your package manager; the app
+# uses them automatically when on PATH (else falls back to the socket scan).
