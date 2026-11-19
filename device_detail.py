@@ -342,9 +342,21 @@ class DeviceDetailUI(tk.Toplevel):
     def inspect_print(self):
         if not self.ip:
             return
-        # Own window/process -- the capture tool is heavier and still separate.
-        subprocess.Popen([sys.executable, "print_capture_window.py", self.ip,
-                         self.hostname or self.vars["Hostname"].get() or ""])
+        name = self.hostname or self.vars["Hostname"].get() or ""
+        self.status.set("Opening print-traffic capture…", "work")
+        # Open in-process so it appears instantly; fall back to a subprocess,
+        # then a visible error, rather than silently doing nothing.
+        try:
+            import print_capture_window
+            print_capture_window.open_capture(self, self.ip, name)
+        except Exception as e:
+            try:
+                subprocess.Popen([sys.executable, "print_capture_window.py",
+                                 self.ip, name])
+            except Exception:
+                messagebox.showerror(
+                    "Couldn't open print capture",
+                    f"Opening the print-traffic capture failed:\n\n{e}")
 
     def _restripe(self):
         """Zebra-stripe the rows and keep openable rows coloured in the accent.

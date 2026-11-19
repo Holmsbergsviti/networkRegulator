@@ -27,15 +27,25 @@ import netreg_traffic as nt
 # clean text.
 _ANSI = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
 
-IP = sys.argv[1] if len(sys.argv) > 1 else ""
-MAC = sys.argv[2] if len(sys.argv) > 2 else ""
-HOSTNAME = sys.argv[3] if len(sys.argv) > 3 else ""
+def open_route(master, ip="", mac="", hostname=""):
+    """Open the route/MITM window in the current process as a child window, so
+    it appears immediately instead of starting a separate program."""
+    win = MitmUI(master, ip, mac, hostname)
+    try:
+        win.lift()
+        win.focus_force()
+    except Exception:
+        pass
+    return win
 
 
-class MitmUI(tk.Tk):
-    def __init__(self):
-        super().__init__()
-        self.title(f"Route traffic through this Mac — {IP or '(no target)'}")
+class MitmUI(tk.Toplevel):
+    def __init__(self, master, ip="", mac="", hostname=""):
+        super().__init__(master)
+        self.ip = ip or ""
+        self.mac = mac or ""
+        self.hostname = hostname or ""
+        self.title(f"Route traffic through this Mac — {self.ip or '(no target)'}")
         self.geometry("640x700")
         self.minsize(560, 560)
         ui.apply_theme(self)
@@ -43,7 +53,7 @@ class MitmUI(tk.Tk):
         self.busy = False
         self._tailing = False
         self._tail_pos = 0
-        self.summary = nt.TrafficSummary(IP or None)
+        self.summary = nt.TrafficSummary(self.ip or None)
         self._resolving = set()  # remote IPs a lookup thread is already working
 
         # --- authorization banner ----------------------------------------- #
@@ -61,8 +71,8 @@ class MitmUI(tk.Tk):
 
         info = ttk.LabelFrame(self, text="Target device")
         info.pack(fill="x", padx=12, pady=(12, 8))
-        for label, val in (("IP", IP or "(unknown)"), ("MAC", MAC or "—"),
-                           ("Hostname", HOSTNAME or "—")):
+        for label, val in (("IP", self.ip or "(unknown)"), ("MAC", self.mac or "—"),
+                           ("Hostname", self.hostname or "—")):
             row = ttk.Frame(info); row.pack(fill="x", padx=10, pady=2)
             ttk.Label(row, text=label + ":", width=10, anchor="w").pack(side="left")
             ttk.Label(row, text=val, anchor="w").pack(side="left")
@@ -136,8 +146,8 @@ class MitmUI(tk.Tk):
                   justify="left", foreground="gray").pack(fill="x", padx=12, pady=(0, 8))
 
         ready, msg = mitm.preflight()
-        self._ready = ready and bool(IP)
-        if not IP:
+        self._ready = ready and bool(self.ip)
+        if not self.ip:
             self.status_var.set("No target IP was passed — nothing to route.")
         elif not ready:
             self.status_var.set(msg)
@@ -223,7 +233,7 @@ class MitmUI(tk.Tk):
             return
         self._tailing = True
         self._tail_pos = 0
-        self.summary = nt.TrafficSummary(IP or None)
+        self.summary = nt.TrafficSummary(self.ip or None)
         self.tree.delete(*self.tree.get_children())
         self.after(500, self._poll_log)
 
@@ -259,7 +269,7 @@ class MitmUI(tk.Tk):
     def start(self):
         if not messagebox.askyesno(
             "Confirm",
-            f"Route {IP}'s traffic through this Mac now?\n\n"
+            f"Route {self.ip}'s traffic through this Mac now?\n\n"
             "Only proceed on a network you own or are authorized to test.",
         ):
             return
@@ -268,7 +278,7 @@ class MitmUI(tk.Tk):
         self.status_var.set("Starting… you may be asked for your password.")
 
         def worker():
-            ok, msg = self.session.start(IP, full_duplex=self.full_duplex.get(),
+            ok, msg = self.session.start(self.ip, full_duplex=self.full_duplex.get(),
                                          sniff=self.sniff.get())
             def done():
                 self.busy = False
@@ -306,4 +316,11 @@ class MitmUI(tk.Tk):
 
 
 if __name__ == "__main__":
-    MitmUI().mainloop()
+    IP = sys.argv[1] if len(sys.argv) > 1 else ""
+    MAC = sys.argv[2] if len(sys.argv) > 2 else ""
+    HOSTNAME = sys.argv[3] if len(sys.argv) > 3 else ""
+    root = tk.Tk()
+    root.withdraw()  # the Toplevel below is the visible window
+    win = MitmUI(root, IP, MAC, HOSTNAME)
+    win.protocol("WM_DELETE_WINDOW", lambda: (win._on_close(), root.destroy()))
+    root.mainloop()

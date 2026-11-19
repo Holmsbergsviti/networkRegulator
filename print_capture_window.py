@@ -24,9 +24,6 @@ from tkinter import ttk, messagebox
 import netreg_printcap as pcap
 from netreg_traffic import human_bytes
 
-IP = sys.argv[1] if len(sys.argv) > 1 else ""
-NAME = sys.argv[2] if len(sys.argv) > 2 else ""
-
 # verdict -> (banner background, short title)
 _VERDICT_STYLE = {
     "plaintext": ("#7a1f1f", "PLAINTEXT — readable!"),
@@ -36,10 +33,24 @@ _VERDICT_STYLE = {
 }
 
 
-class PrintCaptureUI(tk.Tk):
-    def __init__(self):
-        super().__init__()
-        who = NAME or IP or "(no target)"
+def open_capture(master, ip="", name=""):
+    """Open the print-capture window in the current process as a child window,
+    so it appears immediately instead of starting a separate program."""
+    win = PrintCaptureUI(master, ip, name)
+    try:
+        win.lift()
+        win.focus_force()
+    except Exception:
+        pass
+    return win
+
+
+class PrintCaptureUI(tk.Toplevel):
+    def __init__(self, master, ip="", name=""):
+        super().__init__(master)
+        self.ip = ip or ""
+        self.name = name or ""
+        who = self.name or self.ip or "(no target)"
         self.title(f"Inspect print traffic — {who}")
         self.geometry("660x720")
         self.session = pcap.PrintCaptureSession()
@@ -58,7 +69,7 @@ class PrintCaptureUI(tk.Tk):
 
         info = ttk.LabelFrame(self, text="Printer")
         info.pack(fill="x", padx=12, pady=(12, 8))
-        for label, val in (("Name", NAME or "—"), ("IP", IP or "(unknown)")):
+        for label, val in (("Name", self.name or "—"), ("IP", self.ip or "(unknown)")):
             row = ttk.Frame(info); row.pack(fill="x", padx=10, pady=2)
             ttk.Label(row, text=label + ":", width=10, anchor="w").pack(side="left")
             ttk.Label(row, text=val, anchor="w").pack(side="left")
@@ -128,8 +139,8 @@ class PrintCaptureUI(tk.Tk):
         ).pack(fill="x", padx=12, pady=(0, 8))
 
         ready, msg = pcap.preflight()
-        self._ready = ready and bool(IP)
-        if not IP:
+        self._ready = ready and bool(self.ip)
+        if not self.ip:
             self.status_var.set("No printer IP was passed — nothing to capture.")
         elif not ready:
             self.status_var.set(msg)
@@ -184,7 +195,7 @@ class PrintCaptureUI(tk.Tk):
             return
 
         def work():
-            res = self.session.analyze(IP)
+            res = self.session.analyze(self.ip)
             self.after(0, lambda: self._set_verdict(res))
         threading.Thread(target=work, daemon=True).start()
         self.after(1200, self._poll)
@@ -198,7 +209,7 @@ class PrintCaptureUI(tk.Tk):
     def start(self):
         if not messagebox.askyesno(
             "Confirm",
-            f"Capture traffic between this Mac and the printer at {IP}?\n\n"
+            f"Capture traffic between this Mac and the printer at {self.ip}?\n\n"
             "Only proceed on a printer/network you own or are authorized to test."):
             return
         self.busy = True
@@ -206,7 +217,7 @@ class PrintCaptureUI(tk.Tk):
         self.status_var.set("Starting… you may be asked for your password.")
 
         def worker():
-            ok, msg = self.session.start(IP)
+            ok, msg = self.session.start(self.ip)
             def done():
                 self.busy = False
                 self.status_var.set(msg)
@@ -224,7 +235,7 @@ class PrintCaptureUI(tk.Tk):
 
         def worker():
             ok, msg = self.session.stop()
-            res = self.session.analyze(IP)
+            res = self.session.analyze(self.ip)
             def done():
                 self.busy = False
                 self.status_var.set(msg)
@@ -243,4 +254,10 @@ class PrintCaptureUI(tk.Tk):
 
 
 if __name__ == "__main__":
-    PrintCaptureUI().mainloop()
+    IP = sys.argv[1] if len(sys.argv) > 1 else ""
+    NAME = sys.argv[2] if len(sys.argv) > 2 else ""
+    root = tk.Tk()
+    root.withdraw()  # the Toplevel below is the visible window
+    win = PrintCaptureUI(root, IP, NAME)
+    win.protocol("WM_DELETE_WINDOW", lambda: (win._on_close(), root.destroy()))
+    root.mainloop()
