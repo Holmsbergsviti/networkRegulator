@@ -1,8 +1,13 @@
 """
 device_detail.py -- detail window for one device on your network.
 
-Launched by the devices window when you double-click a device:
-    python device_detail.py IP [MAC] [HOSTNAME]
+Can be opened two ways:
+
+* In-process (fast path, no new program starts):
+      import device_detail
+      device_detail.open_detail(parent_window, ip, mac, hostname)
+* Standalone, as its own process (kept for compatibility):
+      python device_detail.py IP [MAC] [HOSTNAME]
 
 Shows what we can learn about the device without touching it destructively:
 its IP / MAC / hostname, whether it answers a ping, and which common TCP ports
@@ -25,10 +30,6 @@ try:
     import netreg_integrations as integrations
 except Exception:
     integrations = None
-
-IP = sys.argv[1] if len(sys.argv) > 1 else ""
-MAC = sys.argv[2] if len(sys.argv) > 2 else ""
-HOSTNAME = sys.argv[3] if len(sys.argv) > 3 else ""
 
 # How to open a given port. Maps a TCP port to (url-scheme, friendly handler).
 # The scheme is handed to the OS ("open" on macOS), which routes it to the
@@ -84,16 +85,34 @@ def open_url(url):
         subprocess.Popen(["xdg-open", url])
 
 
-class DeviceDetailUI(tk.Tk):
-    def __init__(self):
-        super().__init__()
-        self.title(f"Device {IP or '(unknown)'}")
-        self.geometry("580x600")
-        self.minsize(480, 460)
+def open_detail(master, ip="", mac="", hostname=""):
+    """Open the detail view in the current process as a child window. Returns
+    the window. This is the fast path -- no new interpreter/Tk start-up, so the
+    window appears immediately."""
+    win = DeviceDetailUI(master, ip, mac, hostname)
+    try:
+        win.lift()
+        win.focus_force()
+    except Exception:
+        pass
+    return win
+
+
+class DeviceDetailUI(tk.Toplevel):
+    def __init__(self, master, ip="", mac="", hostname=""):
+        super().__init__(master)
+        self.ip = ip or ""
+        self.mac = mac or ""
+        self.hostname = hostname or ""
         self.scanning = False
 
+        self.title(f"Device {self.ip or '(unknown)'}")
+        self.geometry("580x600")
+        self.minsize(480, 460)
+
         ui.apply_theme(self)
-        ui.header(self, IP or "Device", HOSTNAME or "Inspect this device on your network")
+        ui.header(self, self.ip or "Device",
+                  self.hostname or "Inspect this device on your network")
 
         # --- info card -----------------------------------------------------
         info = ttk.LabelFrame(self, text="Device", padding=(4, 6))
@@ -108,10 +127,10 @@ class DeviceDetailUI(tk.Tk):
             ttk.Label(row, textvariable=var, anchor="w", style="Value.TLabel").pack(
                 side="left", fill="x", expand=True)
 
-        self.vars["IP"].set(IP or "(unknown)")
-        self.vars["MAC"].set(MAC or "—")
-        self.vars["Vendor"].set((vendor_for_mac(MAC) or "unknown") if MAC else "—")
-        self.vars["Hostname"].set(HOSTNAME or "…")
+        self.vars["IP"].set(self.ip or "(unknown)")
+        self.vars["MAC"].set(self.mac or "—")
+        self.vars["Vendor"].set((vendor_for_mac(self.mac) or "unknown") if self.mac else "—")
+        self.vars["Hostname"].set(self.hostname or "…")
         self.vars["Reachable"].set("checking…")
 
         # --- action bar ----------------------------------------------------
@@ -160,7 +179,7 @@ class DeviceDetailUI(tk.Tk):
 
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
-        if not IP:
+        if not self.ip:
             self.status.set("No IP for this device — nothing to scan.", "warn")
             self.scan_btn.config(state="disabled")
             self.vars["Reachable"].set("—")
@@ -171,15 +190,15 @@ class DeviceDetailUI(tk.Tk):
             self.after(300, self.start_scan)
 
     def _prime(self):
-        if not HOSTNAME:
-            name = resolve_hostname(IP)
+        if not self.hostname:
+            name = resolve_hostname(self.ip)
             self.after(0, self.vars["Hostname"].set, name or "(no reverse DNS)")
-        ok, latency = ping_host(IP)
+        ok, latency = ping_host(self.ip)
         self.after(0, self.vars["Reachable"].set,
                    (f"yes ({latency})" if ok else "no reply to ping"))
 
     def start_scan(self):
-        if self.scanning or not IP:
+        if self.scanning or not self.ip:
             return
         self.scanning = True
         self.scan_btn.config(state="disabled")
@@ -200,7 +219,7 @@ class DeviceDetailUI(tk.Tk):
             fast = None
             if integrations is not None:
                 try:
-                    fast = integrations.fast_port_scan(IP)
+                    fast = integrations.fast_port_scan(self.ip)
                 except Exception:
                     fast = None
             if fast is not None:
@@ -208,7 +227,7 @@ class DeviceDetailUI(tk.Tk):
                     on_open(port)
                 scanner = "fast scanner"
             else:
-                scan_ports(IP, on_open=on_open)
+                scan_ports(self.ip, on_open=on_open)
                 scanner = "common ports"
             if found["n"]:
                 msg, state = (f"Scan complete ({scanner}) — {found['n']} open port(s). "
@@ -226,7 +245,7 @@ class DeviceDetailUI(tk.Tk):
             p = int(port)
         except (ValueError, TypeError):
             p = None
-        url, action = port_target(IP, p)
+        url, action = port_target(self.ip, p)
         self.tree.insert("", "end", values=(port, "tcp", service_name(port) or "unknown",
                                             action or "—"))
         self._restripe()
@@ -239,11 +258,11 @@ class DeviceDetailUI(tk.Tk):
                 "whether your print jobs are encrypted.", "idle")
 
     def inspect_print(self):
-        if not IP:
+        if not self.ip:
             return
-        # Own window/process, like the other detail views.
-        subprocess.Popen([sys.executable, "print_capture_window.py", IP,
-                         HOSTNAME or self.vars["Hostname"].get() or ""])
+        # Own window/process -- the capture tool is heavier and still separate.
+        subprocess.Popen([sys.executable, "print_capture_window.py", self.ip,
+                         self.hostname or self.vars["Hostname"].get() or ""])
 
     def _restripe(self):
         """Zebra-stripe the rows and keep openable rows coloured in the accent.
@@ -253,7 +272,7 @@ class DeviceDetailUI(tk.Tk):
             vals = self.tree.item(iid, "values")
             tags = ["even" if i % 2 else "odd"]
             try:
-                if port_target(IP, int(vals[0]))[0]:
+                if port_target(self.ip, int(vals[0]))[0]:
                     tags.append("openable")
             except (ValueError, TypeError, IndexError):
                 pass
@@ -268,7 +287,7 @@ class DeviceDetailUI(tk.Tk):
             port = int(vals[0])
         except (ValueError, TypeError, IndexError):
             return
-        url, action = port_target(IP, port)
+        url, action = port_target(self.ip, port)
         service = vals[2] if len(vals) > 2 else ""
         if url:
             self.status.set(f"Opening port {port} ({service})…", "work")
@@ -283,8 +302,8 @@ class DeviceDetailUI(tk.Tk):
                 f"Port {port} ({service or 'unknown'}) has no built-in handler.\n\n"
                 "Try opening it in your browser?"):
             try:
-                open_url(f"http://{IP}:{port}")
-                self.status.set(f"Opening http://{IP}:{port} …", "work")
+                open_url(f"http://{self.ip}:{port}")
+                self.status.set(f"Opening http://{self.ip}:{port} …", "work")
             except Exception as e:
                 self.status.set(f"Couldn't open port {port}: {e}", "error")
 
@@ -301,4 +320,11 @@ class DeviceDetailUI(tk.Tk):
 
 
 if __name__ == "__main__":
-    DeviceDetailUI().mainloop()
+    IP = sys.argv[1] if len(sys.argv) > 1 else ""
+    MAC = sys.argv[2] if len(sys.argv) > 2 else ""
+    HOSTNAME = sys.argv[3] if len(sys.argv) > 3 else ""
+    root = tk.Tk()
+    root.withdraw()  # the Toplevel below is the visible window
+    win = DeviceDetailUI(root, IP, MAC, HOSTNAME)
+    win.protocol("WM_DELETE_WINDOW", root.destroy)
+    root.mainloop()
