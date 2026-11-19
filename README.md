@@ -70,6 +70,24 @@ Set `NETREG_IFACE` if your wireless interface isn't `wlp0s20f3`. Run with the
 privileges aircrack-ng needs. "Restore Wi-Fi" stops monitor mode and restarts
 NetworkManager.
 
+## Inspecting traffic (own network only)
+
+Double-click a device → **Inspect print traffic** to check whether the print
+jobs you send to a printer are encrypted. Tick the authorization box, press
+**Start capture**, then print a test page or document from this Mac. The tool
+captures the traffic on the print ports (raw/9100, IPP/631, LPD/515, IPPS/443)
+with the built-in `tcpdump` and tells you plainly:
+
+- **PLAINTEXT** — the job was sent in the clear; anyone sniffing the LAN could
+  read it. The window shows the document/job name and a readable snippet.
+- **Encrypted (TLS)** — the job used IPPS/TLS; observers see only that you
+  printed, not what.
+
+This reads *this Mac's own* jobs, so no ARP spoofing is needed. (To inspect
+another device's jobs to the printer, use **Route via this Mac** first, then
+capture.) `tcpdump` ships with macOS; you'll be prompted for your password
+because capturing needs root.
+
 ## Roadmap
 1. ✅ Cross-platform backend split; macOS scan + device discovery.
 2. Windows backend (scan/LAN discovery; adapter-gated deauth).
