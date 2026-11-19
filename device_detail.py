@@ -124,6 +124,14 @@ class DeviceDetailUI(tk.Tk):
         self.status.pack(side="left")
         self.status.set("Ready.", "idle")
 
+        # Inspect print traffic: check whether jobs sent to this printer from
+        # this Mac are encrypted. Enabled once we have an IP; it highlights
+        # itself when a print port (9100/631/515) turns up in the scan.
+        self.print_btn = ttk.Button(bar, text="Inspect print traffic",
+                                    command=self.inspect_print, state="disabled")
+        self.print_btn.pack(side="right", padx=8)
+        self._print_ports_found = False
+
         # --- open-ports table ----------------------------------------------
         body = ttk.Frame(self)
         body.pack(fill="both", expand=True, padx=16, pady=(0, 6))
@@ -157,6 +165,8 @@ class DeviceDetailUI(tk.Tk):
             self.scan_btn.config(state="disabled")
             self.vars["Reachable"].set("—")
         else:
+            self.print_btn.config(state="normal")
+            # fill in hostname + reachability in the background, then auto-scan
             threading.Thread(target=self._prime, daemon=True).start()
             self.after(300, self.start_scan)
 
@@ -220,6 +230,20 @@ class DeviceDetailUI(tk.Tk):
         self.tree.insert("", "end", values=(port, "tcp", service_name(port) or "unknown",
                                             action or "—"))
         self._restripe()
+        # A print port on this device? Nudge the user toward the capture tool.
+        if p in (9100, 631, 515) and not self._print_ports_found:
+            self._print_ports_found = True
+            self.print_btn.config(text="Inspect print traffic ✱")
+            self.status.set(
+                "Looks like a printer — use \"Inspect print traffic\" to check "
+                "whether your print jobs are encrypted.", "idle")
+
+    def inspect_print(self):
+        if not IP:
+            return
+        # Own window/process, like the other detail views.
+        subprocess.Popen([sys.executable, "print_capture_window.py", IP,
+                         HOSTNAME or self.vars["Hostname"].get() or ""])
 
     def _restripe(self):
         """Zebra-stripe the rows and keep openable rows coloured in the accent.
