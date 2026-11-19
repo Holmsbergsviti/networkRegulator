@@ -16,9 +16,13 @@ right app -- web ports in your browser, SSH/VNC/SMB/RDP in their handler.
 
 Own-network use only -- this is for inspecting devices on a network you control.
 """
+import re
+import socket
+import ssl
 import subprocess
 import sys
 import threading
+import urllib.request
 import tkinter as tk
 from tkinter import ttk, messagebox
 
@@ -74,6 +78,73 @@ def port_target(ip, port):
     return f"{scheme}://{hostport}", action
 
 
+_TITLE_RE = re.compile(rb"<title[^>]*>(.*?)</title>", re.I | re.S)
+
+# Ports we try when answering "would this show a page in a browser?" -- in the
+# order we try them, most-likely first.
+_WEB_CANDIDATES = (("http", 80), ("https", 443), ("http", 8080))
+
+
+def probe_web(ip, timeout=1.2):
+    """Does this device serve a web page? Try http/https on the usual ports and
+    return info about the first one that answers, or None if none do.
+
+    Returns {"url", "status", "server", "title"} on a hit. A 401/403 still
+    counts as a hit -- the device HAS a web interface, it just wants a login.
+    Self-signed certs (routers, cameras, printers) are accepted on purpose;
+    this is an own-network inspection tool.
+    """
+    if not ip:
+        return None
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    for scheme, port in _WEB_CANDIDATES:
+        url = f"{scheme}://{ip}" if port in (80, 443) else f"{scheme}://{ip}:{port}"
+        req = urllib.request.Request(url, headers={"User-Agent": "NetworkRegulator"})
+        try:
+            with urllib.request.urlopen(req, timeout=timeout, context=ctx) as resp:
+                return _web_result(url, resp.status, resp.headers.get("Server"),
+                                   resp.read(8192))
+        except urllib.error.HTTPError as e:
+            # Got an HTTP response (e.g. 401 Unauthorized) -> there IS a web UI.
+            body = b""
+            try:
+                body = e.read(8192)
+            except Exception:
+                pass
+            return _web_result(url, e.code, e.headers.get("Server") if e.headers else None, body)
+        except (urllib.error.URLError, socket.timeout, ConnectionError, OSError):
+            continue
+        except Exception:
+            continue
+    return None
+
+
+def _web_result(url, status, server, body):
+    title = ""
+    if body:
+        m = _TITLE_RE.search(body)
+        if m:
+            try:
+                title = re.sub(r"\s+", " ", m.group(1).decode("utf-8", "replace")).strip()[:60]
+            except Exception:
+                title = ""
+    return {"url": url, "status": status, "server": (server or "").strip(), "title": title}
+
+
+def web_label(info):
+    """A short human description of a probe_web() result."""
+    if not info:
+        return "No web page", "idle"
+    bits = [info["url"]]
+    detail = info["title"] or info["server"]
+    if detail:
+        bits.append(detail)
+    note = "  (needs login)" if info["status"] in (401, 403) else ""
+    return "✓ Yes — " + " · ".join(bits) + note, "ok"
+
+
 def open_url(url):
     """Hand a url/scheme to the OS to open with whatever app is registered."""
     if sys.platform == "darwin":
@@ -105,6 +176,7 @@ class DeviceDetailUI(tk.Toplevel):
         self.mac = mac or ""
         self.hostname = hostname or ""
         self.scanning = False
+        self._web_info = None
 
         self.title(f"Device {self.ip or '(unknown)'}")
         self.geometry("580x600")
@@ -118,10 +190,10 @@ class DeviceDetailUI(tk.Toplevel):
         info = ttk.LabelFrame(self, text="Device", padding=(4, 6))
         info.pack(fill="x", padx=16, pady=(14, 10))
         self.vars = {}
-        for label in ("IP", "MAC", "Vendor", "Hostname", "Reachable"):
+        for label in ("IP", "MAC", "Vendor", "Hostname", "Reachable", "Web interface"):
             row = ttk.Frame(info, style="Card.TFrame")
             row.pack(fill="x", padx=10, pady=3)
-            ttk.Label(row, text=label, width=11, anchor="w", style="Field.TLabel").pack(side="left")
+            ttk.Label(row, text=label, width=13, anchor="w", style="Field.TLabel").pack(side="left")
             var = tk.StringVar(value="…")
             self.vars[label] = var
             ttk.Label(row, textvariable=var, anchor="w", style="Value.TLabel").pack(
@@ -132,6 +204,7 @@ class DeviceDetailUI(tk.Toplevel):
         self.vars["Vendor"].set((vendor_for_mac(self.mac) or "unknown") if self.mac else "—")
         self.vars["Hostname"].set(self.hostname or "…")
         self.vars["Reachable"].set("checking…")
+        self.vars["Web interface"].set("checking…" if self.ip else "—")
 
         # --- action bar ----------------------------------------------------
         bar = ttk.Frame(self)
@@ -196,6 +269,15 @@ class DeviceDetailUI(tk.Toplevel):
         ok, latency = ping_host(self.ip)
         self.after(0, self.vars["Reachable"].set,
                    (f"yes ({latency})" if ok else "no reply to ping"))
+        # Does it serve a web page (router / printer / camera admin UI)? Probe
+        # on its own thread so a slow device never holds up the rest.
+        threading.Thread(target=self._probe_web, daemon=True).start()
+
+    def _probe_web(self):
+        info = probe_web(self.ip)
+        text, _state = web_label(info)
+        self._web_info = info
+        self.after(0, self.vars["Web interface"].set, text)
 
     def start_scan(self):
         if self.scanning or not self.ip:
