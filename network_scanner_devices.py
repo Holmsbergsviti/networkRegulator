@@ -197,7 +197,16 @@ class DevicesUI(tk.Tk):
         hostname = row.get("Hostname", "")
         if not ip and not mac:
             return
-        subprocess.Popen([sys.executable, "device_detail.py", ip, mac, hostname])
+        self.set_status("Opening device details…", "work")
+        # Open in-process so the window appears instantly. Spawning a fresh
+        # python process (the old behaviour) cost a noticeable lag on macOS,
+        # especially from a cloud-synced folder. Fall back to a subprocess if
+        # anything about the in-process path fails.
+        try:
+            import device_detail
+            device_detail.open_detail(self, ip, mac, hostname)
+        except Exception:
+            subprocess.Popen([sys.executable, "device_detail.py", ip, mac, hostname])
 
     def _selected_station(self):
         sel = self.tree.selection()
