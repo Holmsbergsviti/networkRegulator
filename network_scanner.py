@@ -199,7 +199,24 @@ class WifiNetworksUI(tk.Tk):
         essid = vals[cols.index("ESSID")]
         bssid = vals[cols.index("BSSID")]
         ch = vals[cols.index("CH")]
-        subprocess.Popen([sys.executable, "network_scanner_devices.py", essid, bssid, ch])
+        self.set_status(f"Opening devices on {essid or 'network'}…", "work")
+        # Open the devices window in-process so it appears instantly and any
+        # problem is visible. The old subprocess could die silently (e.g. a
+        # file not yet downloaded from a cloud-synced folder), which looked
+        # like "double-click does nothing". Fall back to a subprocess only if
+        # the in-process open itself fails.
+        try:
+            import network_scanner_devices
+            network_scanner_devices.open_devices(self, essid, bssid, ch)
+        except Exception as e:
+            try:
+                subprocess.Popen([sys.executable, "network_scanner_devices.py",
+                                 essid, bssid, ch])
+            except Exception:
+                messagebox.showerror(
+                    "Couldn't open devices",
+                    f"Opening the device list for {essid or 'this network'} "
+                    f"failed:\n\n{e}")
 
     def run_recovery(self):
         if self.scanning:
