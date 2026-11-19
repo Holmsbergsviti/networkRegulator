@@ -19,6 +19,7 @@ from tkinter import ttk, messagebox
 
 import socket
 
+import netreg_ui as ui
 import netreg_mitm as mitm
 import netreg_traffic as nt
 
@@ -35,7 +36,9 @@ class MitmUI(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title(f"Route traffic through this Mac — {IP or '(no target)'}")
-        self.geometry("620x680")
+        self.geometry("640x700")
+        self.minsize(560, 560)
+        ui.apply_theme(self)
         self.session = mitm.RouteSession()
         self.busy = False
         self._tailing = False
@@ -44,13 +47,15 @@ class MitmUI(tk.Tk):
         self._resolving = set()  # remote IPs a lookup thread is already working
 
         # --- authorization banner ----------------------------------------- #
+        base, bold, title, small, mono = ui.fonts()
         banner = tk.Label(
             self,
-            text=("OWN-NETWORK / AUTHORIZED USE ONLY\n"
+            text=("⚠  OWN-NETWORK / AUTHORIZED USE ONLY\n"
                   "This makes your Mac pretend to be the router so this device's "
                   "traffic flows through you. Only do this on a network you own "
                   "or are explicitly allowed to test."),
-            bg="#7a1f1f", fg="white", justify="left", wraplength=520, padx=12, pady=10,
+            bg=ui.DANGER, fg="white", justify="left", wraplength=560,
+            padx=16, pady=12, font=base, anchor="w",
         )
         banner.pack(fill="x")
 
@@ -77,9 +82,11 @@ class MitmUI(tk.Tk):
         ).pack(anchor="w", padx=14, pady=(8, 2))
 
         bar = ttk.Frame(self); bar.pack(fill="x", padx=12, pady=8)
-        self.start_btn = ttk.Button(bar, text="Start routing", command=self.start, state="disabled")
+        self.start_btn = ttk.Button(bar, text="Start routing", style="Accent.TButton",
+                                    command=self.start, state="disabled")
         self.start_btn.pack(side="left")
-        self.stop_btn = ttk.Button(bar, text="Stop & restore", command=self.stop, state="disabled")
+        self.stop_btn = ttk.Button(bar, text="Stop & restore", style="Danger.TButton",
+                                   command=self.stop, state="disabled")
         self.stop_btn.pack(side="left", padx=10)
 
         self.status_var = tk.StringVar()
@@ -105,6 +112,7 @@ class MitmUI(tk.Tk):
         self.tree_vsb = ttk.Scrollbar(traffic, orient="vertical",
                                       command=self.tree.yview)
         self.tree.configure(yscrollcommand=self.tree_vsb.set)
+        ui.style_tree(self.tree)
 
         # raw per-packet log (hidden until toggled)
         self.traffic_text = tk.Text(traffic, height=11, wrap="none",
@@ -179,6 +187,7 @@ class MitmUI(tk.Tk):
             self.tree.insert("", "end", values=(
                 server, r["packets"], nt.human_bytes(r["bytes"]),
                 r["protos"], r["ports"]))
+        ui.restripe(self.tree)
         if rows:
             self.hint_var.set(
                 f"{len(rows)} server(s), {total} packets so far. HTTPS stays "
