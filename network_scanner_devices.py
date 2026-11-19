@@ -252,7 +252,18 @@ class DevicesUI(tk.Toplevel):
             return
         mac = row.get("MAC") or row.get("Station MAC") or ""
         host = row.get("Hostname", "")
-        subprocess.Popen([sys.executable, "mitm_window.py", ip, mac, host])
+        self.set_status(f"Opening route window for {ip}…", "work")
+        # Open in-process so it appears instantly; fall back to a subprocess,
+        # then a visible error, rather than silently doing nothing.
+        try:
+            import mitm_window
+            mitm_window.open_route(self, ip, mac, host)
+        except Exception as e:
+            try:
+                subprocess.Popen([sys.executable, "mitm_window.py", ip, mac, host])
+            except Exception:
+                messagebox.showerror("Couldn't open Route window",
+                                     f"Opening the route window for {ip} failed:\n\n{e}")
 
     def disconnect_selected(self):
         if not self.caps.can_deauth:
