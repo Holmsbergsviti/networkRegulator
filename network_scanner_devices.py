@@ -1,7 +1,14 @@
 """
 network_scanner_devices.py -- devices window for one network.
 
-Launched by the main window as:  python network_scanner_devices.py ESSID BSSID CH
+Can be opened two ways:
+
+* In-process (fast path, no new program starts):
+      import network_scanner_devices
+      network_scanner_devices.open_devices(parent_window, essid, bssid, ch)
+* Standalone, as its own process (kept for compatibility):
+      python network_scanner_devices.py ESSID BSSID CH
+
 Shows the devices the active backend can see for that network, and (where the
 platform supports it) lets you disconnect one or all of them.
 """
@@ -16,22 +23,30 @@ from netreg_backend import get_backend
 
 REFRESH_MS = 1000
 
-ESSID = sys.argv[1] if len(sys.argv) > 1 else ""
-BSSID = sys.argv[2] if len(sys.argv) > 2 else ""
-CH = sys.argv[3] if len(sys.argv) > 3 else ""
-
 _CENTER = {"PWR", "Packets", "Frames", "Notes"}
 
 
-class DevicesUI(tk.Tk):
-    def __init__(self):
-        super().__init__()
+def open_devices(master, essid="", bssid="", ch=""):
+    """Open the devices window in the current process as a child window. No new
+    interpreter/Tk start-up, so it appears immediately."""
+    win = DevicesUI(master, essid, bssid, ch)
+    try:
+        win.lift()
+        win.focus_force()
+    except Exception:
+        pass
+    return win
+
+
+class DevicesUI(tk.Toplevel):
+    def __init__(self, master, essid="", bssid="", ch=""):
+        super().__init__(master)
         self.backend = get_backend()
         self.caps = self.backend.capabilities()
         self.columns = self.backend.device_columns()
-        self.target = {"ESSID": ESSID, "BSSID": BSSID, "CH": CH}
+        self.target = {"ESSID": essid, "BSSID": bssid, "CH": ch}
 
-        self.title(f"Devices on {ESSID or '(network)'} ({self.backend.name})")
+        self.title(f"Devices on {essid or '(network)'} ({self.backend.name})")
         self.geometry("1040x640")
         self.minsize(820, 480)
         self.scanning = False
@@ -40,7 +55,7 @@ class DevicesUI(tk.Tk):
         ui.apply_theme(self)
 
         # --- header band ---------------------------------------------------
-        head = ui.header(self, ESSID or "Devices",
+        head = ui.header(self, essid or "Devices",
                          "Devices seen on this network. Double-click one for details and open ports.")
         btns = ttk.Frame(head, style="Header.TFrame")
         btns.pack(side="right")
@@ -265,4 +280,11 @@ class DevicesUI(tk.Tk):
 
 
 if __name__ == "__main__":
-    DevicesUI().mainloop()
+    ESSID = sys.argv[1] if len(sys.argv) > 1 else ""
+    BSSID = sys.argv[2] if len(sys.argv) > 2 else ""
+    CH = sys.argv[3] if len(sys.argv) > 3 else ""
+    root = tk.Tk()
+    root.withdraw()  # the Toplevel below is the visible window
+    win = DevicesUI(root, ESSID, BSSID, CH)
+    win.protocol("WM_DELETE_WINDOW", lambda: (win._on_close(), root.destroy()))
+    root.mainloop()
