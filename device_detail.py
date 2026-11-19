@@ -258,8 +258,11 @@ class DeviceDetailUI(tk.Toplevel):
             self.vars["Reachable"].set("—")
         else:
             self.print_btn.config(state="normal")
-            # fill in hostname + reachability in the background, then auto-scan
+            # Each slow lookup gets its OWN thread so none blocks the others.
+            # (Reverse-DNS and an ignored ping used to delay the web check,
+            # leaving "Web interface: checking…" stuck for seconds.)
             threading.Thread(target=self._prime, daemon=True).start()
+            threading.Thread(target=self._probe_web, daemon=True).start()
             self.after(300, self.start_scan)
 
     def _prime(self):
@@ -269,9 +272,6 @@ class DeviceDetailUI(tk.Toplevel):
         ok, latency = ping_host(self.ip)
         self.after(0, self.vars["Reachable"].set,
                    (f"yes ({latency})" if ok else "no reply to ping"))
-        # Does it serve a web page (router / printer / camera admin UI)? Probe
-        # on its own thread so a slow device never holds up the rest.
-        threading.Thread(target=self._probe_web, daemon=True).start()
 
     def _probe_web(self):
         info = probe_web(self.ip)
