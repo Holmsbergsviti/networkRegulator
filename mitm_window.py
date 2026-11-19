@@ -31,11 +31,7 @@ def open_route(master, ip="", mac="", hostname=""):
     """Open the route/MITM window in the current process as a child window, so
     it appears immediately instead of starting a separate program."""
     win = MitmUI(master, ip, mac, hostname)
-    try:
-        win.lift()
-        win.focus_force()
-    except Exception:
-        pass
+    ui.raise_window(win, master)
     return win
 
 
