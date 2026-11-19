@@ -30,11 +30,7 @@ def open_devices(master, essid="", bssid="", ch=""):
     """Open the devices window in the current process as a child window. No new
     interpreter/Tk start-up, so it appears immediately."""
     win = DevicesUI(master, essid, bssid, ch)
-    try:
-        win.lift()
-        win.focus_force()
-    except Exception:
-        pass
+    ui.raise_window(win, master)
     return win
 
 

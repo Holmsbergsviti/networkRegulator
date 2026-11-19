@@ -161,11 +161,7 @@ def open_detail(master, ip="", mac="", hostname=""):
     the window. This is the fast path -- no new interpreter/Tk start-up, so the
     window appears immediately."""
     win = DeviceDetailUI(master, ip, mac, hostname)
-    try:
-        win.lift()
-        win.focus_force()
-    except Exception:
-        pass
+    ui.raise_window(win, master)
     return win
 
 

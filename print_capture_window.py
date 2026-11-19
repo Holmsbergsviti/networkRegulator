@@ -21,6 +21,7 @@ import threading
 import tkinter as tk
 from tkinter import ttk, messagebox
 
+import netreg_ui as ui
 import netreg_printcap as pcap
 from netreg_traffic import human_bytes
 
@@ -37,11 +38,7 @@ def open_capture(master, ip="", name=""):
     """Open the print-capture window in the current process as a child window,
     so it appears immediately instead of starting a separate program."""
     win = PrintCaptureUI(master, ip, name)
-    try:
-        win.lift()
-        win.focus_force()
-    except Exception:
-        pass
+    ui.raise_window(win, master)
     return win
 
 

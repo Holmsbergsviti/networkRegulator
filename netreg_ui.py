@@ -161,6 +161,40 @@ def header(parent, title_text, subtitle=""):
     return bar
 
 
+def raise_window(win, master=None):
+    """Bring a newly-opened child window reliably to the front.
+
+    A plain lift()/focus_force() isn't enough on macOS: a new window often
+    stays *behind* a large parent (e.g. the device list), so it looks like the
+    click did nothing. We offset it from the parent so it's clearly its own
+    window, then pulse -topmost to force it above everything, then release it
+    so it behaves like a normal window afterwards.
+    """
+    try:
+        win.update_idletasks()
+        if master is not None:
+            try:
+                x = master.winfo_rootx() + 48
+                y = master.winfo_rooty() + 48
+                win.geometry(f"+{max(x, 0)}+{max(y, 0)}")
+            except Exception:
+                pass
+        win.deiconify()
+        win.lift()
+        win.attributes("-topmost", True)
+        win.after(500, lambda: _drop_topmost(win))
+        win.focus_force()
+    except Exception:
+        pass
+
+
+def _drop_topmost(win):
+    try:
+        win.attributes("-topmost", False)
+    except Exception:
+        pass
+
+
 def style_tree(tree):
     """Give a Treeview zebra striping. Call after inserting is set up; the
     striping is reapplied by restripe() whenever rows change."""
