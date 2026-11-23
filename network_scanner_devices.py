@@ -273,23 +273,19 @@ class DevicesUI(tk.Toplevel):
         if not ip and not mac:
             return
         self.set_status("Opening device details…", "work")
-        # Open in-process so the window appears instantly. Spawning a fresh
-        # python process (the old behaviour) cost a noticeable lag on macOS,
-        # especially from a cloud-synced folder. Fall back to a subprocess if
-        # the in-process path fails, and surface a visible error if BOTH fail,
-        # so a double-click can never silently do nothing.
-        try:
+        # Open in-process so the window appears instantly. We do NOT fall back to
+        # launching a separate python program: from a cloud-synced folder a
+        # not-yet-downloaded file makes the import fail, and the separate program
+        # fails the same way after a multi-second lag. open_child_window shows
+        # the real error immediately instead of hanging.
+        def _open():
             import device_detail
-            device_detail.open_detail(self, ip, mac, hostname)
+            return device_detail.open_detail(self, ip, mac, hostname)
+
+        if ui.open_child_window(_open, "the device details window", parent=self) is None:
+            self.set_status("Couldn't open device details — see the error.", "error")
+        else:
             self.set_status("Opened device details.", "ok")
-        except Exception as e:
-            try:
-                subprocess.Popen([sys.executable, "device_detail.py", ip, mac, hostname])
-            except Exception:
-                self.set_status(f"Couldn't open device details: {e}", "error")
-                messagebox.showerror(
-                    "Couldn't open device details",
-                    f"Opening the details window for {ip or mac} failed:\n\n{e}")
 
     def _selected_station(self):
         sel = self.tree.selection()
@@ -396,21 +392,15 @@ class DevicesUI(tk.Toplevel):
         host = row.get("Hostname", "")
         win_name = "cut-off" if cut else "route"
         self.set_status(f"Opening {win_name} window for {ip}…", "work")
-        # Open in-process so it appears instantly; fall back to a subprocess,
-        # then a visible error, rather than silently doing nothing.
-        try:
+        # Open in-process so it appears instantly, and show the real error at
+        # once if it fails instead of launching a slow separate program that
+        # would fail the same way from a cloud-synced folder.
+        def _open():
             import mitm_window
-            mitm_window.open_route(self, ip, mac, host, cut=cut)
-        except Exception as e:
-            try:
-                argv = [sys.executable, "mitm_window.py", ip, mac, host]
-                if cut:
-                    argv.append("--cut")
-                subprocess.Popen(argv)
-            except Exception:
-                messagebox.showerror(f"Couldn't open {win_name} window",
-                                     f"Opening the {win_name} window for {ip} "
-                                     f"failed:\n\n{e}")
+            return mitm_window.open_route(self, ip, mac, host, cut=cut)
+
+        if ui.open_child_window(_open, f"the {win_name} window", parent=self) is None:
+            self.set_status(f"Couldn't open the {win_name} window — see the error.", "error")
 
     def disconnect_selected(self):
         if not self.caps.can_deauth:

@@ -195,6 +195,49 @@ def _drop_topmost(win):
         pass
 
 
+def open_child_window(opener, what, parent=None):
+    """Open a child window in-process via `opener()` (a no-arg callable) and
+    return it.
+
+    If opening fails, DON'T silently fall back to launching a separate Python
+    program: from a cloud-synced folder (iCloud/Yandex) a not-yet-downloaded
+    source file makes the import fail, and the separate-program fallback just
+    fails the same way after a multi-second delay — which is exactly what makes
+    a click feel like it "hangs" before anything happens. Instead, surface the
+    real error immediately and log the full traceback, so the problem is
+    visible and fast rather than a mysterious wait.
+
+    `what` is a short noun phrase for the message ("the devices window").
+    Returns the window on success, or None on failure.
+    """
+    try:
+        return opener()
+    except Exception as e:
+        import os
+        import tempfile
+        import traceback
+        from tkinter import messagebox
+
+        log_path = os.path.join(tempfile.gettempdir(), "netreg-open-errors.log")
+        try:
+            with open(log_path, "a") as f:
+                f.write(f"--- opening {what} ---\n{traceback.format_exc()}\n")
+        except Exception:
+            log_path = "(could not write a log file)"
+        try:
+            messagebox.showerror(
+                f"Couldn't open {what}",
+                f"Opening {what} failed:\n\n{e}\n\n"
+                "If this app lives in a cloud-synced folder (iCloud, Yandex, "
+                "Dropbox…), a program file may not be downloaded yet. Right-click "
+                "the app folder in Finder and choose “Download Now”, then try "
+                f"again.\n\nDetails were logged to:\n{log_path}",
+                parent=parent)
+        except Exception:
+            pass
+        return None
+
+
 def style_tree(tree):
     """Give a Treeview zebra striping. Call after inserting is set up; the
     striping is reapplied by restripe() whenever rows change."""

@@ -405,19 +405,15 @@ class DeviceDetailUI(tk.Toplevel):
             return
         name = self.hostname or self.vars["Hostname"].get() or ""
         self.status.set("Opening print-traffic capture…", "work")
-        # Open in-process so it appears instantly; fall back to a subprocess,
-        # then a visible error, rather than silently doing nothing.
-        try:
+        # Open in-process so it appears instantly, and show the real error at
+        # once if it fails instead of launching a slow separate program that
+        # would fail the same way from a cloud-synced folder.
+        def _open():
             import print_capture_window
-            print_capture_window.open_capture(self, self.ip, name)
-        except Exception as e:
-            try:
-                subprocess.Popen([sys.executable, "print_capture_window.py",
-                                 self.ip, name])
-            except Exception:
-                messagebox.showerror(
-                    "Couldn't open print capture",
-                    f"Opening the print-traffic capture failed:\n\n{e}")
+            return print_capture_window.open_capture(self, self.ip, name)
+
+        if ui.open_child_window(_open, "the print-traffic capture", parent=self) is None:
+            self.status.set("Couldn't open print capture — see the error.", "error")
 
     def _restripe(self):
         """Zebra-stripe the rows, colour openable rows in the accent, and flag
