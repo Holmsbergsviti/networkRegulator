@@ -114,6 +114,36 @@ with tempfile.TemporaryDirectory() as td:
     finally:
         ddb.default_path, ddb._legacy_path = orig_default, orig_legacy
 
+print("macOS pyobjc isolation (the Location-hang fix):")
+# The GUI process must NEVER import pyobjc (CoreWLAN/CoreLocation -> AppKit),
+# which collides with Tkinter's NSApplication and freezes the UI. Only the
+# throwaway helper and the module it imports may touch pyobjc.
+import glob as _glob
+offenders = []
+for p in _glob.glob(os.path.join(HERE, "*.py")):
+    base = os.path.basename(p)
+    if base in ("mac_wifi_helper.py", "mac_native.py") or base.startswith("test_"):
+        continue
+    src = open(p).read()
+    if "import CoreWLAN" in src or "import CoreLocation" in src or "import mac_native" in src:
+        offenders.append(base)
+check("no GUI-process module imports pyobjc/mac_native", offenders == [],)
+if offenders:
+    print("    offenders:", offenders)
+
+check("mac_wifi_helper.py exists (runs pyobjc out-of-process)",
+      os.path.exists(os.path.join(HERE, "mac_wifi_helper.py")))
+
+# The backend's subprocess runner degrades to None off macOS (helper prints
+# null/"" ), so scanning falls back to system_profiler instead of hanging.
+import netreg_backend as _bk
+check("backend has out-of-process mac helper runner",
+      hasattr(_bk, "_run_mac_helper"))
+check("helper runner returns None for scan off macOS (safe fallback)",
+      _bk._run_mac_helper("scan", 10.0) is None)
+check("build glob bundles mac_wifi_helper.py",
+      "for f in *.py" in open(os.path.join(HERE, "build_macapp.sh")).read())
+
 print()
 if fails:
     print(f"{len(fails)}/{total} FAILED: {fails}")

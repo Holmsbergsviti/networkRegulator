@@ -60,6 +60,7 @@ OPTIONS = {
         "netreg_oui",
         "netreg_seen",
         "mac_native",
+        "mac_wifi_helper",
         "recovery",
     ],
 }

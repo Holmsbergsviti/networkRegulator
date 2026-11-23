@@ -264,6 +264,33 @@ class Backend:
 
 
 # --------------------------------------------------------------------------- #
+#  macOS CoreWLAN/CoreLocation access -- always via a SEPARATE process
+# --------------------------------------------------------------------------- #
+# Importing pyobjc (CoreWLAN/CoreLocation -> AppKit) in the same process as
+# Tkinter makes the two NSApplication/run-loop setups collide and the GUI
+# freezes ("asked for Location, then stuck"). So we never import pyobjc here;
+# we shell out to mac_wifi_helper.py, which does it in a throwaway process.
+_MAC_HELPER = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                           "mac_wifi_helper.py")
+
+
+def _run_mac_helper(cmd: str, timeout: float):
+    """Run one mac_wifi_helper command in a child process and return its parsed
+    JSON result, or None on any failure. Pure subprocess + json -- no pyobjc in
+    this (GUI) process."""
+    import json
+    try:
+        r = subprocess.run([sys.executable, _MAC_HELPER, cmd],
+                           capture_output=True, text=True, timeout=timeout)
+        out = (r.stdout or "").strip()
+        if not out:
+            return None
+        return json.loads(out)
+    except Exception:
+        return None
+
+
+# --------------------------------------------------------------------------- #
 #  macOS backend
 # --------------------------------------------------------------------------- #
 class MacBackend(Backend):
@@ -322,9 +349,13 @@ class MacBackend(Backend):
     def prepare(self):
         """Request Location Services so CoreWLAN can return real SSIDs.
         Only meaningful when running from the packaged .app; harmless otherwise."""
+        # Trigger the Location prompt in a throwaway child process (never import
+        # pyobjc in the GUI process -- see _run_mac_helper). Backgrounded so the
+        # window still opens immediately.
         try:
-            import mac_native
-            threading.Thread(target=mac_native.request_location, daemon=True).start()
+            threading.Thread(
+                target=lambda: _run_mac_helper("location", timeout=12.0),
+                daemon=True).start()
         except Exception:
             pass
 
@@ -398,11 +429,8 @@ class MacBackend(Backend):
         return self._scan_system_profiler()
 
     def _scan_corewlan(self):
-        try:
-            import mac_native
-            nets = mac_native.scan_networks()
-        except Exception:
-            nets = None
+        # CoreWLAN scan runs in the helper process; it can take a few seconds.
+        nets = _run_mac_helper("scan", timeout=15.0)
         if not nets:
             return None
         rows = []
@@ -474,13 +502,9 @@ class MacBackend(Backend):
     def _connected_ssid(self) -> str:
         """Real SSID of the network we're on. Tries CoreWLAN (works in the
         packaged app with Location granted), then the legacy networksetup."""
-        try:
-            import mac_native
-            ssid = mac_native.connected_ssid()
-            if ssid:
-                return ssid
-        except Exception:
-            pass
+        ssid = _run_mac_helper("ssid", timeout=8.0)
+        if isinstance(ssid, str) and ssid:
+            return ssid
         try:
             r = subprocess.run(
                 ["networksetup", "-getairportnetwork", self._default_iface()],
