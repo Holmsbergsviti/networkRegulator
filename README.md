@@ -35,9 +35,9 @@ python3 netreg_backend.py
 
 | Capability            | macOS                              | Linux                         | Windows        |
 |-----------------------|------------------------------------|-------------------------------|----------------|
-| Scan nearby networks  | ✅ `system_profiler`               | ✅ airodump-ng                | ⏳ planned     |
-| List devices          | ✅ LAN scan (your network)         | ✅ airodump-ng stations       | ⏳ planned     |
-| Disconnect (deauth)   | ⚠️ needs monitor-mode USB adapter  | ✅ aireplay-ng                | ❌ driver wall |
+| Scan nearby networks  | ✅ `system_profiler`               | ✅ airodump-ng                | ✅ `netsh wlan` |
+| List devices          | ✅ LAN scan (your network)         | ✅ airodump-ng stations       | ✅ LAN scan     |
+| Disconnect (deauth)   | ⚠️ needs monitor-mode USB adapter  | ✅ aireplay-ng                | ❌ driver wall  |
 
 ### macOS notes (current focus)
 - **Scanning** and **device discovery** work out of the box with built-in
@@ -65,6 +65,19 @@ names via Apple's CoreWLAN API. Requires `pyobjc` (the build script installs
   3. Put it in monitor mode and set `NETREG_MON_IFACE` to that interface
      (e.g. `export NETREG_MON_IFACE=en1`).
 
+### Windows notes
+- **Scanning** uses the built-in `netsh wlan show networks` — nothing to
+  install. Unlike macOS, Windows **does** show neighbouring networks' BSSIDs,
+  so a mesh/extender shows one row per access point.
+- **Device discovery** is a LAN ping-sweep that fills the Windows ARP table,
+  then reads it with `arp -a` — same approach as macOS. No admin rights needed.
+- **Disconnecting (deauth)** is **not possible** with standard Windows Wi-Fi
+  drivers: they can't do monitor mode or packet injection. That needs a special
+  USB adapter with injection-capable drivers (and in practice a Linux/aircrack
+  setup). The app says so instead of failing silently.
+- Scan parsing anchors on the English `netsh` labels; on a non-English Windows
+  the SSID/BSSID/signal still parse, but channel/auth labels may not.
+
 ### Linux notes
 Set `NETREG_IFACE` if your wireless interface isn't `wlp0s20f3`. Run with the
 privileges aircrack-ng needs. "Restore Wi-Fi" stops monitor mode and restarts
@@ -90,7 +103,7 @@ because capturing needs root.
 
 ## Roadmap
 1. ✅ Cross-platform backend split; macOS scan + device discovery.
-2. Windows backend (scan/LAN discovery; adapter-gated deauth).
+2. ✅ Windows backend (native `netsh` scan + LAN device discovery).
 3. GUI polish: per-device actions, setup helper, richer device info.
 4. Extra libraries: Scapy (custom packets), python-nmap (vendor/service info),
    per-device bandwidth monitoring.
