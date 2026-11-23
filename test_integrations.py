@@ -106,6 +106,28 @@ check("mac admin wrapper uses osascript", mitm._mac_admin_command(["bettercap"])
 ok, msg = mitm.RouteSession().start("192.168.1.5")
 check("start refuses cleanly without bettercap", ok is False and "bettercap" in msg.lower())
 
+print("netreg_probe (risk flags + banner parsing, pure):")
+import netreg_probe as probe
+check("telnet flagged as risky", "clear text" in probe.risk_for_port(23).lower())
+check("plain FTP flagged as risky", bool(probe.risk_for_port(21)))
+check("SMB 445 flagged as risky", bool(probe.risk_for_port(445)))
+check("https not risky by itself", probe.risk_for_port(443) == "")
+check("non-numeric port tolerated", probe.risk_for_port("nope") == "")
+check("web 200 with no login is a risk", bool(probe.web_risk({"status": 200})))
+check("web 401 (needs login) is NOT flagged", probe.web_risk({"status": 401}) == "")
+check("no web info => no web risk", probe.web_risk(None) == "")
+check("risk summary lists each risky port + web",
+      probe.summarize_risks([22, 23, 445], {"status": 200}) ==
+      ["Port 23: " + probe.RISKY_PORTS[23],
+       "Port 445: " + probe.RISKY_PORTS[445],
+       "Web interface with no login — anyone on the network can open it"])
+check("ssh banner parsed", probe.parse_banner(22, b"SSH-2.0-OpenSSH_9.6\r\n") == "SSH-2.0-OpenSSH_9.6")
+check("http Server header extracted",
+      probe.parse_banner(80, b"HTTP/1.1 200 OK\r\nServer: nginx/1.24.0\r\nX: y\r\n\r\n") == "nginx/1.24.0")
+check("empty banner => empty string", probe.parse_banner(22, b"") == "")
+check("control bytes stripped from banner",
+      "\x00" not in probe.parse_banner(21, b"220 \x00\x01FTP ready\r\n"))
+
 print("netreg_traffic (sniff-log parsing + grouping):")
 import netreg_traffic as nt
 _L = "[00:13:16] [net.sniff.udp] udp 192.178.24.10:https > host.local.:53273 180 bytes"
