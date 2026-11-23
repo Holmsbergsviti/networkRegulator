@@ -77,9 +77,12 @@ class DevicesUI(tk.Toplevel):
         # --- action row (operations on the selected device) ----------------
         actions = ttk.Frame(self)
         actions.pack(fill="x", padx=18, pady=(14, 6))
+        self.open_btn = ttk.Button(actions, text="Open device", style="Accent.TButton",
+                                   command=self.open_selected_device)
+        self.open_btn.pack(side="left")
         self.route_btn = ttk.Button(actions, text="Route via this Mac",
                                     command=self.route_selected)
-        self.route_btn.pack(side="left")
+        self.route_btn.pack(side="left", padx=(8, 0))
         self.cut_btn = ttk.Button(actions, text="Cut off internet",
                                   style="Danger.TButton", command=self.cut_selected)
         self.cut_btn.pack(side="left", padx=(8, 0))
@@ -263,14 +266,28 @@ class DevicesUI(tk.Toplevel):
             self.tree.item(iid, tags=tuple(tags))
 
     def on_double_click(self, _event=None):
+        self.open_selected_device(quiet=True)
+
+    def open_selected_device(self, quiet=False):
+        """Open the details window for the selected device. Shared by the
+        "Open device" button and a double-click. `quiet` suppresses the
+        "pick a device" hint (used by the double-click path)."""
         sel = self.tree.selection()
         if not sel or sel[0] == self._empty_iid:
+            if not quiet:
+                messagebox.showinfo(
+                    "Pick a device",
+                    "Select a device in the list first, then press “Open device”.")
             return
         row = dict(zip(self.display_columns, self.tree.item(sel[0], "values")))
         ip = row.get("IP", "")
         mac = row.get("MAC") or row.get("Station MAC") or ""
         hostname = row.get("Hostname", "")
         if not ip and not mac:
+            if not quiet:
+                messagebox.showinfo(
+                    "Nothing to open",
+                    "This row has no IP or MAC to inspect.")
             return
         self.set_status("Opening device details…", "work")
         # Open in-process so the window appears instantly. We do NOT fall back to
@@ -355,10 +372,29 @@ class DevicesUI(tk.Toplevel):
         try:
             netreg_report.save_report(text, path)
             self.set_status(f"Saved snapshot ({len(devices)} device(s)) to {path}", "ok")
+            if messagebox.askyesno(
+                    "Snapshot saved",
+                    f"Saved a snapshot of {len(devices)} device(s) to:\n\n{path}\n\n"
+                    "Reveal it in your file browser?"):
+                self._reveal(path)
         except Exception as e:
             self.set_status(f"Couldn't save snapshot: {e}", "error")
             messagebox.showerror("Couldn't save snapshot",
                                  f"Writing the snapshot failed:\n\n{e}")
+
+    @staticmethod
+    def _reveal(path):
+        """Show a saved file in the OS file browser (Finder/Explorer/file mgr)."""
+        try:
+            if sys.platform == "darwin":
+                subprocess.Popen(["open", "-R", path])
+            elif sys.platform.startswith("win"):
+                subprocess.Popen(["explorer", "/select,", path])
+            else:
+                import os
+                subprocess.Popen(["xdg-open", os.path.dirname(path) or "."])
+        except Exception:
+            pass
 
     def route_selected(self):
         """Route the selected device's traffic through this Mac (and keep

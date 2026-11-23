@@ -64,6 +64,16 @@ class WifiNetworksUI(tk.Tk):
         self.status.pack(fill="x", padx=18, pady=(12, 8))
         self.status.set(self.caps.scan_note or "Ready to scan.", "idle")
 
+        # --- action row (operates on the selected network) -----------------
+        acts = ttk.Frame(self)
+        acts.pack(fill="x", padx=18, pady=(0, 6))
+        self.view_btn = ttk.Button(acts, text="View devices", style="Accent.TButton",
+                                   command=self.open_selected_devices)
+        self.view_btn.pack(side="left")
+        ttk.Label(acts, text="Select a network above, then “View devices” "
+                  "(or double-click it).", style="Muted.TLabel").pack(
+                      side="left", padx=(10, 0))
+
         # --- table ---------------------------------------------------------
         body = ttk.Frame(self)
         body.pack(fill="both", expand=True, padx=18, pady=(0, 6))
@@ -197,8 +207,16 @@ class WifiNetworksUI(tk.Tk):
         ui.restripe(self.tree)
 
     def on_double_click(self, _event=None):
+        self.open_selected_devices()
+
+    def open_selected_devices(self):
+        """Open the devices window for the selected network. Shared by the
+        "View devices" button and a double-click on the row."""
         sel = self.tree.selection()
         if not sel or sel[0] == self._empty_iid:
+            messagebox.showinfo(
+                "Pick a network",
+                "Select a network in the list first, then press “View devices”.")
             return
         vals = self.tree.item(sel[0], "values")
         cols = list(NETWORK_COLUMNS)
@@ -243,7 +261,8 @@ class WifiNetworksUI(tk.Tk):
 
     def run_speed_test(self):
         """Measure this computer's own internet link (latency / download /
-        upload) in the background and show the result in the status line."""
+        upload) in the background. Progress shows in the status line; the final
+        result also pops up in a dialog so it can't be missed."""
         self.speed_btn.config(state="disabled")
         self.set_status("Starting speed test…", "work")
 
@@ -255,6 +274,19 @@ class WifiNetworksUI(tk.Tk):
             def done():
                 self.set_status(res.describe(), "ok" if res.ok else "error")
                 self.speed_btn.config(state="normal")
+                if res.ok:
+                    messagebox.showinfo(
+                        "Speed test result",
+                        f"Your connection:\n\n"
+                        f"Download:  {netreg_speedtest.mbps(res.download_bps):.1f} Mbps\n"
+                        f"Upload:    {netreg_speedtest.mbps(res.upload_bps):.1f} Mbps\n"
+                        f"Ping:      {res.latency_ms:.0f} ms  (jitter ±{res.jitter_ms:.0f} ms)",
+                        parent=self)
+                else:
+                    messagebox.showerror(
+                        "Speed test failed",
+                        f"The speed test couldn't complete:\n\n{res.error or 'unknown error'}",
+                        parent=self)
 
             self.after(0, done)
 
