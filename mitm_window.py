@@ -23,6 +23,7 @@ import netreg_ui as ui
 import netreg_mitm as mitm
 import netreg_traffic as nt
 import netreg_bandwidth as bw
+import netreg_https as https
 
 # Strip terminal colour / control sequences bettercap writes, so the pane shows
 # clean text.
@@ -60,6 +61,11 @@ class MitmUI(tk.Toplevel):
         self.summary = nt.TrafficSummary(self.ip or None)
         self.meter = bw.BandwidthMeter(self.ip or None)  # live throughput tally
         self._resolving = set()  # remote IPs a lookup thread is already working
+        # HTTPS content inspection (opt-in; route mode only). Reveals *what* the
+        # device sends over HTTPS, not just who, by terminating TLS via mitmproxy.
+        self.https = https.InspectSession()
+        self.https_sum = https.HttpsFlowSummary()
+        self._https_pos = 0
 
         # --- authorization banner ----------------------------------------- #
         base, bold, title, small, mono = ui.fonts()
@@ -100,6 +106,25 @@ class MitmUI(tk.Toplevel):
                       "Show a live summary of the redirected traffic")
         ttk.Checkbutton(opts, text=sniff_text,
                         variable=self.sniff).pack(anchor="w")
+
+        # HTTPS content inspection: route mode only (cut mode drops traffic, so
+        # there's nothing to inspect). Off by default; disabled until mitmproxy
+        # is installed. Turning it on while routing terminates TLS for this one
+        # device so its requests become readable — the device must trust
+        # mitmproxy's CA first (see "Certificate help").
+        self.inspect_https = tk.BooleanVar(value=False)
+        if not self.cut:
+            https_ready, https_note = https.preflight()
+            hrow = ttk.Frame(opts); hrow.pack(fill="x", anchor="w")
+            self.https_chk = ttk.Checkbutton(
+                hrow, variable=self.inspect_https, command=self._toggle_https,
+                text="Inspect HTTPS content (needs mitmproxy + cert on device)")
+            self.https_chk.pack(side="left")
+            if not https_ready:
+                self.https_chk.config(state="disabled")
+            self._https_note = https_note
+            ttk.Button(hrow, text="Certificate help",
+                       command=self._show_cert_help).pack(side="left", padx=(10, 0))
 
         self.authorized = tk.BooleanVar(value=False)
         ttk.Checkbutton(
@@ -155,6 +180,30 @@ class MitmUI(tk.Toplevel):
         self.bw_var = tk.StringVar(value="Throughput: —")
         ttk.Label(self, textvariable=self.bw_var, anchor="w",
                   style="Field.TLabel").pack(fill="x", padx=14, pady=(2, 0))
+
+        # HTTPS content pane (route mode only): the actual requests once the
+        # device trusts the cert. Hidden until "Inspect HTTPS content" is on.
+        self.https_frame = None
+        if not self.cut:
+            self.https_frame = ttk.LabelFrame(
+                self, text="HTTPS requests (content — needs cert trusted on device)")
+            hcols = ("time", "method", "host", "path", "status", "type")
+            self.https_tree = ttk.Treeview(self.https_frame, columns=hcols,
+                                           show="headings", height=6)
+            for c, text, w, anchor in (
+                ("time", "Time", 70, "w"), ("method", "Method", 70, "center"),
+                ("host", "Host", 190, "w"), ("path", "Path", 220, "w"),
+                ("status", "Status", 60, "center"), ("type", "Type", 120, "w"),
+            ):
+                self.https_tree.heading(c, text=text)
+                self.https_tree.column(c, width=w, anchor=anchor)
+            hvsb = ttk.Scrollbar(self.https_frame, orient="vertical",
+                                 command=self.https_tree.yview)
+            self.https_tree.configure(yscrollcommand=hvsb.set)
+            hvsb.pack(side="right", fill="y")
+            self.https_tree.pack(side="left", fill="both", expand=True)
+            ui.style_tree(self.https_tree)
+            # packed on demand by _toggle_https so it takes no space when unused
 
         bottom = ttk.Frame(self); bottom.pack(fill="x", padx=12, pady=(0, 8))
         self.show_raw = tk.BooleanVar(value=False)
@@ -240,6 +289,70 @@ class MitmUI(tk.Toplevel):
             f"Throughput:  ↓ {bw.human_rate(r['down'])}   ↑ {bw.human_rate(r['up'])}"
             f"      total {nt.human_bytes(t['total'])} in {t['packets']} packets")
 
+    def _render_https(self):
+        """Render the most recent HTTPS requests the proxy has decrypted."""
+        if self.https_frame is None:
+            return
+        import time as _t
+        self.https_tree.delete(*self.https_tree.get_children())
+        for r in self.https_sum.recent(60):
+            ts = r.get("ts") or 0
+            tstr = _t.strftime("%H:%M:%S", _t.localtime(ts)) if ts else ""
+            path = (r.get("path") or "")[:90]
+            self.https_tree.insert("", "end", values=(
+                tstr, r.get("method", ""), r.get("host", ""), path,
+                r.get("status", ""), r.get("content_type", "")))
+        ui.restripe(self.https_tree)
+
+    def _show_cert_help(self):
+        messagebox.showinfo("Install mitmproxy's certificate",
+                            https.cert_guidance(self.hostname or self.ip or
+                                                "the target device"))
+
+    def _toggle_https(self):
+        """Turn HTTPS content inspection on/off. Requires routing to already be
+        running for this device (mitmproxy only sees traffic that reaches us)."""
+        if self.inspect_https.get():
+            if not self.session.is_running():
+                self.inspect_https.set(False)
+                messagebox.showinfo(
+                    "Start routing first",
+                    "HTTPS inspection needs routing to be running for this "
+                    "device first. Tick the authorization box, press "
+                    "“Start routing”, then turn this on.")
+                return
+            self.status_var.set("Starting HTTPS inspection… you may be asked "
+                                "for your password.")
+            self.https_sum = https.HttpsFlowSummary()
+            self._https_pos = 0
+            if self.https_frame is not None and not self.https_frame.winfo_ismapped():
+                self.https_frame.pack(fill="both", expand=True, padx=12, pady=(4, 4))
+
+            def worker():
+                ok, msg = self.https.start(self.ip)
+                self.after(0, lambda: self._after_https_start(ok, msg))
+
+            threading.Thread(target=worker, daemon=True).start()
+        else:
+            def worker():
+                ok, msg = self.https.stop()
+                self.after(0, lambda: self.status_var.set(
+                    msg if ok else f"HTTPS inspection: {msg}"))
+
+            threading.Thread(target=worker, daemon=True).start()
+
+    def _after_https_start(self, ok, msg):
+        self.status_var.set(msg)
+        if not ok:
+            self.inspect_https.set(False)
+            if self.https_frame is not None and self.https_frame.winfo_ismapped():
+                self.https_frame.pack_forget()
+            return
+        # Remind the user the device must trust mitmproxy's CA or nothing shows.
+        messagebox.showinfo("Trust the certificate first",
+                            https.cert_guidance(self.hostname or self.ip or
+                                                "the target device"))
+
     def _resolve_names(self):
         """Kick off reverse-DNS for any remote IP we haven't named yet, on a
         background thread so the UI never blocks."""
@@ -298,6 +411,19 @@ class MitmUI(tk.Toplevel):
                     self._render_bandwidth()
             except Exception:
                 pass
+        # HTTPS content flow log (only while inspection is on)
+        hpath = self.https.flow_log
+        if self.inspect_https.get() and hpath and os.path.exists(hpath):
+            try:
+                with open(hpath, "r", errors="replace") as f:
+                    f.seek(self._https_pos)
+                    hchunk = f.read()
+                    self._https_pos = f.tell()
+                if hchunk:
+                    self.https_sum.add_text(hchunk)
+                    self._render_https()
+            except Exception:
+                pass
         self.after(700, self._poll_log)
 
     def _sync_buttons(self):
@@ -340,6 +466,11 @@ class MitmUI(tk.Toplevel):
         self.busy = True
         self._sync_buttons()
         self.status_var.set("Stopping and restoring the network…")
+        # Tear down HTTPS inspection too, so TLS interception never outlives
+        # routing.
+        if self.https.is_running():
+            self.inspect_https.set(False)
+            threading.Thread(target=self.https.stop, daemon=True).start()
 
         def worker():
             ok, msg = self.session.stop()
@@ -354,6 +485,8 @@ class MitmUI(tk.Toplevel):
     def _on_close(self):
         self._stop_tailing()
         try:
+            if self.https.is_running():
+                self.https.stop()  # never leave TLS interception running
             if self.session.is_running():
                 self.session.stop()  # always heal the network on close
         finally:
