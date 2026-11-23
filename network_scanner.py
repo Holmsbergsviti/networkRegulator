@@ -115,6 +115,25 @@ class WifiNetworksUI(tk.Tk):
         self.protocol("WM_DELETE_WINDOW", self._on_close)
         self.after(REFRESH_MS, self.refresh_table)
 
+        # Make the main window actually come to the front on launch. Without
+        # this, Tk opens the window but never orders it front or activates the
+        # app, so on macOS it can appear behind whatever is already frontmost
+        # (and if another app is in full-screen, on a different Space entirely).
+        self.after(0, self._bring_to_front)
+
+    def _bring_to_front(self):
+        """Lift + focus the window so it doesn't hide behind other windows."""
+        try:
+            self.update_idletasks()
+            self.deiconify()
+            self.lift()
+            # Briefly pin topmost, then release, to pull it in front once.
+            self.attributes("-topmost", True)
+            self.after(400, lambda: self.attributes("-topmost", False))
+            self.focus_force()
+        except Exception:
+            pass
+
     # ----- empty-state helpers --------------------------------------------
     def _show_empty(self, text):
         if self.tree.get_children():
