@@ -573,6 +573,49 @@ class MacBackend(Backend):
             pass
         return "en0"
 
+    @staticmethod
+    def _read_arp() -> str:
+        """Current ARP table text (hosts that have answered so far)."""
+        return subprocess.run(["arp", "-a", "-n"], capture_output=True,
+                              text=True, timeout=10).stdout
+
+    @staticmethod
+    def _arp_rows(arp_text, net) -> list[dict]:
+        """Parse `arp -a -n` output into device rows within `net`. Pure, so it's
+        unit-testable without touching the network."""
+        rows, seen = [], set()
+        for line in (arp_text or "").splitlines():
+            m = re.search(r"\((\d+\.\d+\.\d+\.\d+)\) at ([0-9a-fA-F:]{11,17})", line)
+            if not m:
+                continue
+            dip, mac = m.group(1), m.group(2).lower()
+            if "incomplete" in line or mac == "ff:ff:ff:ff:ff:ff":
+                continue
+            try:
+                if ipaddress.IPv4Address(dip) not in net:
+                    continue
+            except Exception:
+                continue
+            if dip in seen:
+                continue
+            seen.add(dip)
+            rows.append({"IP": dip, "MAC": mac, "Vendor": vendor_for_mac(mac),
+                         "Hostname": ""})
+        return rows
+
+    def _publish_devices(self, rows, note=None):
+        """Merge rows into the cross-sweep tracker (so nothing flickers) and
+        publish the sorted result for the UI. Used both for the live partial
+        updates during a sweep and for the final enriched result."""
+        merged = self._dev_seen.update(rows)
+        merged.sort(key=lambda r: tuple(int(x) for x in r["IP"].split("."))
+                    if r.get("IP") else (0,))
+        with self._lock:
+            self._devices = merged
+            if note is not None:
+                self._dev_note = note
+        return merged
+
     def _lan_scan(self) -> tuple[list[dict], str]:
         iface = self._default_iface()
         try:
@@ -594,8 +637,11 @@ class MacBackend(Backend):
             hosts = hosts[:254]
         total = len(hosts)
 
-        # Ping every address in parallel, reporting progress into the device
-        # note as we go so the UI shows how far along the sweep is.
+        # Ping every address so hosts populate the ARP table. We do NOT wait for
+        # the whole sweep before showing anything: the pings run in the
+        # background while we poll the ARP table and publish devices as they
+        # appear, so the list fills in live instead of after one long wait. More
+        # workers means the first pass finishes in ~1 round, not several.
         progress_lock = threading.Lock()
         done = {"n": 0}
 
@@ -604,39 +650,45 @@ class MacBackend(Backend):
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             with progress_lock:
                 done["n"] += 1
-                n = done["n"]
-            if n % 8 == 0 or n == total:
-                with self._lock:
-                    self._dev_note = f"Pinging the local network… {n}/{total} addresses"
 
-        with ThreadPoolExecutor(max_workers=128) as ex:
-            list(ex.map(ping, hosts))
+        pings_done = threading.Event()
+
+        def run_pings():
+            try:
+                with ThreadPoolExecutor(max_workers=min(256, total or 1)) as ex:
+                    list(ex.map(ping, hosts))
+            finally:
+                pings_done.set()
+
+        threading.Thread(target=run_pings, daemon=True).start()
+
+        # While the pings run, publish whatever's already in the ARP table so
+        # devices show up as they answer rather than all at the end.
+        while not pings_done.wait(0.5):
+            if not self._dev_scanning:
+                break
+            try:
+                partial = self._arp_rows(self._read_arp(), net)
+            except Exception:
+                partial = []
+            with progress_lock:
+                n = done["n"]
+            if partial:
+                self._publish_devices(
+                    partial,
+                    f"Scanning… {len(partial)} device(s) so far "
+                    f"({n}/{total} addresses checked)")
+            else:
+                with self._lock:
+                    self._dev_note = f"Scanning the network… {n}/{total} addresses"
 
         with self._lock:
             self._dev_note = "Reading the device (ARP) table…"
-        rows: list[dict] = []
         try:
-            arp = subprocess.run(["arp", "-a", "-n"], capture_output=True, text=True, timeout=10).stdout
+            arp = self._read_arp()
         except Exception as e:
             return [], f"ARP read failed: {e}"
-        seen = set()
-        for line in arp.splitlines():
-            m = re.search(r"\((\d+\.\d+\.\d+\.\d+)\) at ([0-9a-fA-F:]{11,17})", line)
-            if not m:
-                continue
-            dip, mac = m.group(1), m.group(2).lower()
-            if "incomplete" in line or mac in ("ff:ff:ff:ff:ff:ff",):
-                continue
-            try:
-                if ipaddress.IPv4Address(dip) not in net:
-                    continue
-            except Exception:
-                continue
-            if dip in seen:
-                continue
-            seen.add(dip)
-            rows.append({"IP": dip, "MAC": mac, "Vendor": vendor_for_mac(mac),
-                         "Hostname": ""})
+        rows = self._arp_rows(arp, net)
 
         # best-effort reverse DNS, bounded so a slow resolver can't hang the scan
         if rows:
