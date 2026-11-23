@@ -176,6 +176,32 @@ check("falls back to IP when MAC is blank",
 _tr2.reset()
 check("reset clears kept items", len(_tr2.update([])) == 0)
 
+print("netreg_channels (congestion + best-channel, pure):")
+import netreg_channels as chan
+_nets = [
+    {"CH": "1", "Band": "2.4", "PWR": "-40"},
+    {"CH": "1", "Band": "2.4", "PWR": "-55"},
+    {"CH": "6", "Band": "2.4", "PWR": "-70"},
+    {"CH": "36", "Band": "5", "PWR": "-50"},
+]
+_r = chan.analyze(_nets)
+check("counts APs per band", _r["aps_24"] == 3 and _r["aps_5"] == 1)
+check("load table covers channels 1..11", [c for c, _n, _s in _r["load_24"]] == list(range(1, 12)))
+check("recommends a non-overlapping 2.4 channel", _r["best_24"][0] in chan.NON_OVERLAP_24)
+check("busy ch1 is not the recommendation", _r["best_24"][0] != 1)
+check("recommends 11 as the clear one here", _r["best_24"][0] == 11)
+check("5 GHz best picks an unused standard channel", _r["best_5"] and _r["best_5"][0] in chan.STD_5)
+check("empty scan still gives a safe 2.4 pick",
+      chan.analyze([])["best_24"][0] in chan.NON_OVERLAP_24)
+check("no 5 GHz networks => best_5 is None", chan.analyze([])["best_5"] is None)
+check("stronger neighbour raises congestion more",
+      chan.analyze([{"CH": "1", "Band": "2.4", "PWR": "-40"}])["load_24"][0][2] >
+      chan.analyze([{"CH": "1", "Band": "2.4", "PWR": "-85"}])["load_24"][0][2])
+check("overlap bleeds across adjacent 2.4 channels (ch3 feels ch1)",
+      chan.analyze([{"CH": "1", "Band": "2.4", "PWR": "-50"}])["load_24"][2][1] == 1)
+check("bad channel value is ignored, not crashing",
+      chan.analyze([{"CH": "x", "Band": "2.4", "PWR": "-50"}])["aps_24"] == 0)
+
 print()
 if fails:
     print(f"{len(fails)}/{double} FAILED: {fails}")
