@@ -136,7 +136,7 @@ def grab_banner(ip: str, port, timeout: float = 1.5) -> str:
             if p in HTTP_PLAINTEXT_PORTS:
                 try:
                     s.sendall(b"HEAD / HTTP/1.0\r\nHost: " + ip.encode("ascii", "ignore")
-                              + b"\r\nUser-Agent: NetworkRegulator\r\n\r\n")
+                              + b"\r\nUser-Agent: LanLens\r\n\r\n")
                 except Exception:
                     return ""
             try:

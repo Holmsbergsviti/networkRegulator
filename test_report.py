@@ -30,7 +30,7 @@ print("netreg_report.build_report:")
 r = rep.build_report(networks=nets, devices=devs,
                      meta={"network": "UGA008", "iface": "en0"},
                      gateway_ip="192.168.1.1", now=FIXED)
-check("has a title", r.startswith("# NetworkRegulator snapshot"))
+check("has a title", r.startswith("# LanLens snapshot"))
 check("includes the fixed timestamp", "2026-11-23 14:00:00" in r)
 check("counts devices", "**Devices found:** 2" in r)
 check("lists both device IPs", "192.168.1.1" in r and "192.168.1.190" in r)
@@ -44,7 +44,7 @@ check("own-network footer present", "Own-network use only" in r)
 print("empty input:")
 r0 = rep.build_report(now=FIXED)
 check("no devices -> placeholder", "_No devices recorded._" in r0)
-check("no crash, still has title", r0.startswith("# NetworkRegulator snapshot"))
+check("no crash, still has title", r0.startswith("# LanLens snapshot"))
 
 print("default_filename + save_report:")
 fn = rep.default_filename(now=FIXED)

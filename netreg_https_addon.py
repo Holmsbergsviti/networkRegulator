@@ -1,6 +1,6 @@
 """
 netreg_https_addon.py -- mitmproxy addon that records each intercepted
-request/response as ONE JSON line, for NetworkRegulator's HTTPS content view.
+request/response as ONE JSON line, for LanLens's HTTPS content view.
 
 ====================  OWN-NETWORK / AUTHORIZED USE ONLY  ====================
 This is loaded by mitmdump only while the user has confirmed they own / are

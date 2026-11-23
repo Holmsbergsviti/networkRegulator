@@ -103,7 +103,7 @@ def probe_web(ip, timeout=1.2):
     ctx.verify_mode = ssl.CERT_NONE
     for scheme, port in _WEB_CANDIDATES:
         url = f"{scheme}://{ip}" if port in (80, 443) else f"{scheme}://{ip}:{port}"
-        req = urllib.request.Request(url, headers={"User-Agent": "NetworkRegulator"})
+        req = urllib.request.Request(url, headers={"User-Agent": "LanLens"})
         try:
             with urllib.request.urlopen(req, timeout=timeout, context=ctx) as resp:
                 return _web_result(url, resp.status, resp.headers.get("Server"),

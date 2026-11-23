@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!--
+    LanLens runs UNSANDBOXED on purpose: it shells out to system tools
+    (ping, arp, route, networksetup, bettercap, mitmproxy) and reads the local
+    network, none of which work inside the App Sandbox. We are not shipping
+    through the Mac App Store, so the sandbox is not required.
+
+    These entitlements are compatible with free ad-hoc signing. They do NOT
+    require a paid Apple Developer account. The JIT / unsigned-memory
+    entitlements let the bundled Python interpreter run normally under the
+    hardened runtime if you ever choose to enable it.
+  -->
+  <key>com.apple.security.app-sandbox</key>
+  <false/>
+  <key>com.apple.security.cs.allow-jit</key>
+  <true/>
+  <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+  <true/>
+  <key>com.apple.security.cs.disable-library-validation</key>
+  <true/>
+</dict>
+</plist>

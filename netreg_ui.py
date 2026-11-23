@@ -1,5 +1,5 @@
 """
-netreg_ui.py -- shared look & feel for every NetworkRegulator window.
+netreg_ui.py -- shared look & feel for every LanLens window.
 
 One place to define the palette, fonts, spacing and widget styling so the
 main window, the devices window, the device-detail window and the route

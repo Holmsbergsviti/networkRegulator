@@ -67,7 +67,7 @@ def default_flow_log_path() -> str:
     """JSONL file the addon writes and the GUI tails."""
     mac_logs = os.path.join(os.path.expanduser("~"), "Library", "Logs")
     if sys.platform == "darwin" and os.path.isdir(mac_logs):
-        return os.path.join(mac_logs, "NetworkRegulator-https.jsonl")
+        return os.path.join(mac_logs, "LanLens-https.jsonl")
     return os.path.join(tempfile.gettempdir(), "netreg_https.jsonl")
 
 

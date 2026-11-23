@@ -2,7 +2,7 @@
 
 This is the implementation companion to [`libraries.md`](libraries.md). It
 describes how the recommended open-source libraries are connected into
-NetworkRegulator so they can actually be used, and how to enable each one.
+LanLens so they can actually be used, and how to enable each one.
 
 ## Design: optional layers with graceful fallback
 

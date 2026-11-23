@@ -38,7 +38,7 @@ def default_log_path() -> str:
     bettercap process), the system temp dir elsewhere."""
     mac_logs = os.path.join(os.path.expanduser("~"), "Library", "Logs")
     if sys.platform == "darwin" and os.path.isdir(mac_logs):
-        return os.path.join(mac_logs, "NetworkRegulator-traffic.log")
+        return os.path.join(mac_logs, "LanLens-traffic.log")
     return os.path.join(tempfile.gettempdir(), "netreg_traffic.log")
 
 
