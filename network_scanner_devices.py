@@ -16,10 +16,11 @@ import subprocess
 import sys
 import threading
 import tkinter as tk
-from tkinter import ttk, messagebox, simpledialog
+from tkinter import ttk, messagebox, simpledialog, filedialog
 
 import netreg_ui as ui
 import netreg_devicedb
+import netreg_report
 from netreg_backend import get_backend
 
 REFRESH_MS = 1000
@@ -85,6 +86,9 @@ class DevicesUI(tk.Toplevel):
         self.label_btn = ttk.Button(actions, text="Label device…",
                                     command=self.label_selected)
         self.label_btn.pack(side="left", padx=(8, 0))
+        self.snapshot_btn = ttk.Button(actions, text="Save snapshot",
+                                       command=self.save_snapshot)
+        self.snapshot_btn.pack(side="left", padx=(8, 0))
         self.disc_btn = ttk.Button(actions, text="Disconnect Selected", style="Danger.TButton",
                                    command=self.disconnect_selected)
         self.disc_btn.pack(side="left", padx=(8, 0))
@@ -325,6 +329,40 @@ class DevicesUI(tk.Toplevel):
             vals[0] = self.db.label(mac)
             self.tree.item(iid, values=vals)
         self.set_status(f"Labelled {mac} as “{self.db.label(mac) or '(cleared)'}”.", "ok")
+
+    def save_snapshot(self):
+        """Write the current device list (and this network) to a Markdown
+        snapshot the user can keep for a baseline or diff later."""
+        devices = []
+        for iid in self.tree.get_children():
+            if iid == self._empty_iid:
+                continue
+            row = dict(zip(self.display_columns, self.tree.item(iid, "values")))
+            devices.append(row)
+        essid = self.target.get("ESSID", "")
+        networks = [dict(self.target)] if (essid or self.target.get("BSSID")) else []
+        if not devices:
+            messagebox.showinfo(
+                "Nothing to save",
+                "No devices in the list yet — run a scan first.")
+            return
+        text = netreg_report.build_report(
+            networks=networks, devices=devices,
+            meta={"network": essid})
+        path = filedialog.asksaveasfilename(
+            parent=self, title="Save network snapshot",
+            defaultextension=".md",
+            initialfile=netreg_report.default_filename(),
+            filetypes=[("Markdown", "*.md"), ("All files", "*.*")])
+        if not path:
+            return
+        try:
+            netreg_report.save_report(text, path)
+            self.set_status(f"Saved snapshot ({len(devices)} device(s)) to {path}", "ok")
+        except Exception as e:
+            self.set_status(f"Couldn't save snapshot: {e}", "error")
+            messagebox.showerror("Couldn't save snapshot",
+                                 f"Writing the snapshot failed:\n\n{e}")
 
     def route_selected(self):
         """Route the selected device's traffic through this Mac (and keep
