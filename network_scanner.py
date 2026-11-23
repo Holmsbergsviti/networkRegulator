@@ -206,23 +206,18 @@ class WifiNetworksUI(tk.Tk):
         bssid = vals[cols.index("BSSID")]
         ch = vals[cols.index("CH")]
         self.set_status(f"Opening devices on {essid or 'network'}…", "work")
-        # Open the devices window in-process so it appears instantly and any
-        # problem is visible. The old subprocess could die silently (e.g. a
-        # file not yet downloaded from a cloud-synced folder), which looked
-        # like "double-click does nothing". Fall back to a subprocess only if
-        # the in-process open itself fails.
-        try:
+        # Open the devices window in-process so it appears instantly. We do NOT
+        # fall back to launching a separate Python program: from a cloud-synced
+        # folder a not-yet-downloaded file makes the import fail, and the
+        # separate program fails the same way after a multi-second delay — which
+        # is what made a click feel like it hung. open_child_window surfaces the
+        # real error immediately instead.
+        def _open():
             import network_scanner_devices
-            network_scanner_devices.open_devices(self, essid, bssid, ch)
-        except Exception as e:
-            try:
-                subprocess.Popen([sys.executable, "network_scanner_devices.py",
-                                 essid, bssid, ch])
-            except Exception:
-                messagebox.showerror(
-                    "Couldn't open devices",
-                    f"Opening the device list for {essid or 'this network'} "
-                    f"failed:\n\n{e}")
+            return network_scanner_devices.open_devices(self, essid, bssid, ch)
+
+        if ui.open_child_window(_open, "the devices window", parent=self) is None:
+            self.set_status("Couldn't open the devices window — see the error.", "error")
 
     def _current_networks(self):
         """The networks currently in the table, as dicts the channel analyzer
@@ -238,15 +233,13 @@ class WifiNetworksUI(tk.Tk):
 
     def open_channel_analyzer(self):
         self.set_status("Opening channel analyzer…", "work")
-        try:
+
+        def _open():
             import channel_window
-            channel_window.open_channels(self, self._current_networks)
-        except Exception as e:
-            try:
-                subprocess.Popen([sys.executable, "channel_window.py"])
-            except Exception:
-                messagebox.showerror("Couldn't open channel analyzer",
-                                     f"Opening the channel analyzer failed:\n\n{e}")
+            return channel_window.open_channels(self, self._current_networks)
+
+        if ui.open_child_window(_open, "the channel analyzer", parent=self) is None:
+            self.set_status("Couldn't open the channel analyzer — see the error.", "error")
 
     def run_speed_test(self):
         """Measure this computer's own internet link (latency / download /
