@@ -139,9 +139,14 @@ def apply_theme(root):
         style.configure("Treeview.Heading", font=bold, foreground=MUTED,
                         background="#eef0f3", relief="flat", padding=(8, 8))
         style.map("Treeview.Heading", background=[("active", "#e4e7ec")])
+        # The "!selected" foreground is deliberate: on macOS the ttk Treeview
+        # ignores the plain `foreground=INK` from configure() above for
+        # unselected rows and renders them in a washed-out system gray (rows
+        # become nearly unreadable on the white body). Forcing the colour via a
+        # state map fixes it; the zebra tags also pin it (see style_tree).
         style.map("Treeview",
                   background=[("selected", ACCENT)],
-                  foreground=[("selected", "#ffffff")])
+                  foreground=[("selected", "#ffffff"), ("!selected", INK)])
         style.configure("Vertical.TScrollbar", background="#e4e7ec",
                         troughcolor=BG, bordercolor=BG, arrowcolor=MUTED)
     except Exception:
@@ -242,8 +247,14 @@ def style_tree(tree):
     """Give a Treeview zebra striping. Call after inserting is set up; the
     striping is reapplied by restripe() whenever rows change."""
     try:
-        tree.tag_configure("odd", background=SURFACE)
-        tree.tag_configure("even", background=STRIPE)
+        # Pin the text colour on the zebra tags too: on macOS the Treeview's
+        # configured foreground is otherwise ignored for unselected rows, which
+        # left them washed-out/unreadable. Tags win over the widget default, so
+        # this guarantees dark text on every row. (openable/risk/new tags set
+        # their own foreground and are applied after odd/even, so they still win
+        # where they apply.)
+        tree.tag_configure("odd", background=SURFACE, foreground=INK)
+        tree.tag_configure("even", background=STRIPE, foreground=INK)
     except Exception:
         pass
 
