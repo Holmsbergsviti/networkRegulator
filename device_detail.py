@@ -27,6 +27,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 
 import netreg_ui as ui
+import netreg_probe as probe
 from netreg_backend import (scan_ports, service_name, ping_host,
                             resolve_hostname, vendor_for_mac)
 
@@ -220,29 +221,44 @@ class DeviceDetailUI(tk.Toplevel):
         self.print_btn.pack(side="right", padx=8)
         self._print_ports_found = False
 
+        # --- risk summary (hidden until something is flagged) --------------
+        self.risk_lbl = tk.Label(
+            self, text="", bg=ui.DANGER, fg="white", justify="left",
+            anchor="w", wraplength=540, padx=12, pady=8)
+        # packed/unpacked by _refresh_risk_banner so it takes no space when empty
+
         # --- open-ports table ----------------------------------------------
         body = ttk.Frame(self)
+        self._ports_body = body
         body.pack(fill="both", expand=True, padx=16, pady=(0, 6))
-        cols = ("Port", "Proto", "Service", "Open with")
+        cols = ("Port", "Service", "Version", "Open with")
         self.tree = ttk.Treeview(body, columns=cols, show="headings", height=12)
         vsb = ttk.Scrollbar(body, orient="vertical", command=self.tree.yview)
         self.tree.configure(yscrollcommand=vsb.set)
         vsb.pack(side="right", fill="y")
         self.tree.pack(side="left", fill="both", expand=True)
-        for c, w, anchor in (("Port", 70, "center"), ("Proto", 70, "center"),
-                             ("Service", 190, "w"), ("Open with", 180, "w")):
+        for c, w, anchor in (("Port", 64, "center"), ("Service", 130, "w"),
+                             ("Version", 200, "w"), ("Open with", 150, "w")):
             self.tree.heading(c, text=c)
             self.tree.column(c, width=w, anchor=anchor)
         ui.style_tree(self.tree)
         self.tree.tag_configure("openable", foreground=ui.ACCENT)
+        # A risky service (Telnet, plain FTP, exposed SMB, …) is flagged in red;
+        # configured last so its colour wins over the "openable" accent.
+        self.tree.tag_configure("risk", foreground="#ffffff", background=ui.DANGER)
         self.tree.bind("<Double-1>", self.on_port_double_click)
         self._empty_iid = None
+        self._risks = {}        # port -> reason, filled as the scan progresses
+        self._web_risk = ""     # set by the web probe if the page needs no login
 
         ttk.Label(
             self,
-            text=("Open TCP ports from a plain connect-scan of common ports. "
-                  "Double-click a port to open it — web ports launch your browser, "
-                  "SSH / VNC / file-sharing open their app. For devices on a network you control."),
+            text=("Open TCP ports from a plain connect-scan of common ports, with "
+                  "the service version where it announces one. Risky services "
+                  "(Telnet, plain FTP, exposed SMB, a no-login web page) are "
+                  "flagged in red and summarised above. Double-click a port to "
+                  "open it — web ports launch your browser, SSH / VNC / "
+                  "file-sharing open their app. For devices on a network you control."),
             style="Muted.TLabel", wraplength=540, justify="left",
         ).pack(fill="x", padx=16, pady=(0, 12))
 
@@ -273,7 +289,16 @@ class DeviceDetailUI(tk.Toplevel):
         info = probe_web(self.ip)
         text, _state = web_label(info)
         self._web_info = info
-        self.after(0, self.vars["Web interface"].set, text)
+        risk = probe.web_risk(info)
+        if risk:
+            text += "  ⚠ no login"
+        self.after(0, self._apply_web_result, text, risk)
+
+    def _apply_web_result(self, text, risk):
+        self.vars["Web interface"].set(text)
+        if risk:
+            self._web_risk = risk
+            self._refresh_risk_banner()
 
     def start_scan(self):
         if self.scanning or not self.ip:
@@ -324,9 +349,22 @@ class DeviceDetailUI(tk.Toplevel):
         except (ValueError, TypeError):
             p = None
         url, action = port_target(self.ip, p)
-        self.tree.insert("", "end", values=(port, "tcp", service_name(port) or "unknown",
-                                            action or "—"))
+        iid = f"port:{port}"
+        if not self.tree.exists(iid):
+            self.tree.insert("", "end", iid=iid,
+                             values=(port, service_name(port) or "unknown",
+                                     "…", action or "—"))
         self._restripe()
+        # Risk flag (instant + pure): red-tag the row and add it to the summary.
+        reason = probe.risk_for_port(p) if p is not None else ""
+        if reason:
+            self._risks[p] = reason
+            self._refresh_risk_banner()
+            self._restripe()
+        # Version / banner: grab in the background so the UI never blocks.
+        if p is not None:
+            threading.Thread(target=self._fill_version, args=(p, iid),
+                             daemon=True).start()
         # A print port on this device? Nudge the user toward the capture tool.
         if p in (9100, 631, 515) and not self._print_ports_found:
             self._print_ports_found = True
@@ -355,18 +393,54 @@ class DeviceDetailUI(tk.Toplevel):
                     f"Opening the print-traffic capture failed:\n\n{e}")
 
     def _restripe(self):
-        """Zebra-stripe the rows and keep openable rows coloured in the accent.
-        A row carries both a stripe tag (background) and, if it has a handler,
-        the 'openable' tag (foreground) -- the two options don't conflict."""
+        """Zebra-stripe the rows, colour openable rows in the accent, and flag
+        risky services in red. 'risk' is appended last so its red wins over the
+        'openable' accent when a row is both."""
         for i, iid in enumerate(self.tree.get_children()):
             vals = self.tree.item(iid, "values")
             tags = ["even" if i % 2 else "odd"]
             try:
-                if port_target(self.ip, int(vals[0]))[0]:
-                    tags.append("openable")
+                p = int(vals[0])
             except (ValueError, TypeError, IndexError):
-                pass
+                p = None
+            if p is not None and port_target(self.ip, p)[0]:
+                tags.append("openable")
+            if p is not None and p in self._risks:
+                tags.append("risk")
             self.tree.item(iid, tags=tuple(tags))
+
+    def _fill_version(self, port, iid):
+        """Background: fetch a banner/version string for one port and show it."""
+        text = ""
+        if port in probe.HTTPS_PORTS and self._web_info:
+            text = self._web_info.get("server") or self._web_info.get("title") or ""
+        if not text:
+            text = probe.grab_banner(self.ip, port)
+        if not text and port in probe.HTTPS_PORTS:
+            text = "TLS (encrypted)"
+        if text:
+            self.after(0, self._set_version, iid, text)
+
+    def _set_version(self, iid, text):
+        if self.tree.exists(iid):
+            vals = list(self.tree.item(iid, "values"))
+            if len(vals) >= 3:
+                vals[2] = text
+                self.tree.item(iid, values=vals)
+
+    def _refresh_risk_banner(self):
+        """Show/update the red risk summary above the table, or hide it when
+        there's nothing flagged."""
+        lines = [f"Port {p}: {self._risks[p]}" for p in sorted(self._risks)]
+        if self._web_risk:
+            lines.append(self._web_risk)
+        if not lines:
+            self.risk_lbl.pack_forget()
+            return
+        header = "⚠  Security risk" if len(lines) == 1 else f"⚠  {len(lines)} security risks"
+        self.risk_lbl.config(text=header + "\n" + "\n".join("• " + l for l in lines))
+        if not self.risk_lbl.winfo_ismapped():
+            self.risk_lbl.pack(fill="x", padx=16, pady=(0, 8), before=self._ports_body)
 
     def on_port_double_click(self, _event=None):
         sel = self.tree.selection()
@@ -378,7 +452,7 @@ class DeviceDetailUI(tk.Toplevel):
         except (ValueError, TypeError, IndexError):
             return
         url, action = port_target(self.ip, port)
-        service = vals[2] if len(vals) > 2 else ""
+        service = vals[1] if len(vals) > 1 else ""
         if url:
             self.status.set(f"Opening port {port} ({service})…", "work")
             try:
@@ -403,7 +477,7 @@ class DeviceDetailUI(tk.Toplevel):
         self.scan_btn.config(state="normal")
         if not self.tree.get_children():
             self._empty_iid = self.tree.insert(
-                "", "end", values=("—", "", "No open ports found", ""))
+                "", "end", values=("—", "No open ports found", "", ""))
 
     def _on_close(self):
         self.destroy()
