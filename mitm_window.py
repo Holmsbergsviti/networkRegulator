@@ -22,6 +22,7 @@ import socket
 import netreg_ui as ui
 import netreg_mitm as mitm
 import netreg_traffic as nt
+import netreg_bandwidth as bw
 
 # Strip terminal colour / control sequences bettercap writes, so the pane shows
 # clean text.
@@ -57,6 +58,7 @@ class MitmUI(tk.Toplevel):
         self._tailing = False
         self._tail_pos = 0
         self.summary = nt.TrafficSummary(self.ip or None)
+        self.meter = bw.BandwidthMeter(self.ip or None)  # live throughput tally
         self._resolving = set()  # remote IPs a lookup thread is already working
 
         # --- authorization banner ----------------------------------------- #
@@ -149,6 +151,11 @@ class MitmUI(tk.Toplevel):
 
         self._show_summary()  # pack the table
 
+        # live per-device throughput (updates as traffic flows through)
+        self.bw_var = tk.StringVar(value="Throughput: —")
+        ttk.Label(self, textvariable=self.bw_var, anchor="w",
+                  style="Field.TLabel").pack(fill="x", padx=14, pady=(2, 0))
+
         bottom = ttk.Frame(self); bottom.pack(fill="x", padx=12, pady=(0, 8))
         self.show_raw = tk.BooleanVar(value=False)
         ttk.Checkbutton(bottom, text="Show raw packets instead of the grouped summary",
@@ -225,6 +232,14 @@ class MitmUI(tk.Toplevel):
                 f"encrypted — you see who the device talks to and how much, "
                 f"not page contents.")
 
+    def _render_bandwidth(self):
+        """Show the device's current throughput (and totals) from the meter."""
+        r = self.meter.rate()
+        t = self.meter.totals()
+        self.bw_var.set(
+            f"Throughput:  ↓ {bw.human_rate(r['down'])}   ↑ {bw.human_rate(r['up'])}"
+            f"      total {nt.human_bytes(t['total'])} in {t['packets']} packets")
+
     def _resolve_names(self):
         """Kick off reverse-DNS for any remote IP we haven't named yet, on a
         background thread so the UI never blocks."""
@@ -255,6 +270,8 @@ class MitmUI(tk.Toplevel):
         self._tailing = True
         self._tail_pos = 0
         self.summary = nt.TrafficSummary(self.ip or None)
+        self.meter = bw.BandwidthMeter(self.ip or None)
+        self.bw_var.set("Throughput: —")
         self.tree.delete(*self.tree.get_children())
         self.after(500, self._poll_log)
 
@@ -274,9 +291,11 @@ class MitmUI(tk.Toplevel):
                 if chunk:
                     clean = _ANSI.sub("", chunk)
                     self.summary.add_text(clean)
+                    self.meter.add_text(clean)
                     self._append_raw(clean)
                     self._resolve_names()
                     self._render_summary()
+                    self._render_bandwidth()
             except Exception:
                 pass
         self.after(700, self._poll_log)

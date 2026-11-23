@@ -53,6 +53,9 @@ class WifiNetworksUI(tk.Tk):
         self.channels_btn = ttk.Button(btns, text="Channel analyzer",
                                        command=self.open_channel_analyzer)
         self.channels_btn.pack(side="left", padx=(8, 0))
+        self.speed_btn = ttk.Button(btns, text="Speed test",
+                                     command=self.run_speed_test)
+        self.speed_btn.pack(side="left", padx=(8, 0))
         self.recover_btn = ttk.Button(btns, text="Restore Wi-Fi", command=self.run_recovery)
         self.recover_btn.pack(side="left", padx=(8, 0))
 
@@ -244,6 +247,25 @@ class WifiNetworksUI(tk.Tk):
             except Exception:
                 messagebox.showerror("Couldn't open channel analyzer",
                                      f"Opening the channel analyzer failed:\n\n{e}")
+
+    def run_speed_test(self):
+        """Measure this computer's own internet link (latency / download /
+        upload) in the background and show the result in the status line."""
+        self.speed_btn.config(state="disabled")
+        self.set_status("Starting speed test…", "work")
+
+        def worker():
+            import netreg_speedtest
+            res = netreg_speedtest.run_speedtest(
+                progress=lambda m: self.after(0, lambda m=m: self.set_status(m, "work")))
+
+            def done():
+                self.set_status(res.describe(), "ok" if res.ok else "error")
+                self.speed_btn.config(state="normal")
+
+            self.after(0, done)
+
+        threading.Thread(target=worker, daemon=True).start()
 
     def run_recovery(self):
         if self.scanning:

@@ -28,6 +28,7 @@ from tkinter import ttk, messagebox
 
 import netreg_ui as ui
 import netreg_probe as probe
+import netreg_fingerprint as fingerprint
 from netreg_backend import (scan_ports, service_name, ping_host,
                             resolve_hostname, vendor_for_mac)
 
@@ -187,7 +188,7 @@ class DeviceDetailUI(tk.Toplevel):
         info = ttk.LabelFrame(self, text="Device", padding=(4, 6))
         info.pack(fill="x", padx=16, pady=(14, 10))
         self.vars = {}
-        for label in ("IP", "MAC", "Vendor", "Hostname", "Reachable", "Web interface"):
+        for label in ("IP", "MAC", "Vendor", "Type", "Hostname", "Reachable", "Web interface"):
             row = ttk.Frame(info, style="Card.TFrame")
             row.pack(fill="x", padx=10, pady=3)
             ttk.Label(row, text=label, width=13, anchor="w", style="Field.TLabel").pack(side="left")
@@ -199,9 +200,12 @@ class DeviceDetailUI(tk.Toplevel):
         self.vars["IP"].set(self.ip or "(unknown)")
         self.vars["MAC"].set(self.mac or "—")
         self.vars["Vendor"].set((vendor_for_mac(self.mac) or "unknown") if self.mac else "—")
+        self._open_ports = []        # filled as the scan finds open ports
+        self.vars["Type"].set("…")
         self.vars["Hostname"].set(self.hostname or "…")
         self.vars["Reachable"].set("checking…")
         self.vars["Web interface"].set("checking…" if self.ip else "—")
+        self._refresh_type()  # first guess from vendor/hostname; refined by the scan
 
         # --- action bar ----------------------------------------------------
         bar = ttk.Frame(self)
@@ -281,9 +285,29 @@ class DeviceDetailUI(tk.Toplevel):
         if not self.hostname:
             name = resolve_hostname(self.ip)
             self.after(0, self.vars["Hostname"].set, name or "(no reverse DNS)")
+            self.after(0, self._refresh_type)  # hostname can sharpen the guess
         ok, latency = ping_host(self.ip)
         self.after(0, self.vars["Reachable"].set,
                    (f"yes ({latency})" if ok else "no reply to ping"))
+
+    def _refresh_type(self):
+        """Guess what KIND of device this is from the cheap signals we already
+        have (vendor, open ports, hostname) and show it. Re-run as those signals
+        arrive; it's pure and never touches the network."""
+        vendor = (vendor_for_mac(self.mac) or "") if self.mac else ""
+        host = self.hostname or ""
+        shown = self.vars["Hostname"].get()
+        if shown and not shown.startswith(("…", "(")):
+            host = shown
+        try:
+            r = fingerprint.classify(vendor=vendor, ports=self._open_ports,
+                                     hostname=host)
+        except Exception:
+            return
+        if r.kind and r.kind != "Unknown":
+            self.vars["Type"].set(f"{r.kind}  ({r.confidence} confidence)")
+        else:
+            self.vars["Type"].set("Unknown")
 
     def _probe_web(self):
         info = probe_web(self.ip)
@@ -349,6 +373,9 @@ class DeviceDetailUI(tk.Toplevel):
         except (ValueError, TypeError):
             p = None
         url, action = port_target(self.ip, p)
+        if p is not None and p not in self._open_ports:
+            self._open_ports.append(p)
+            self._refresh_type()  # open ports sharpen the device-type guess
         iid = f"port:{port}"
         if not self.tree.exists(iid):
             self.tree.insert("", "end", iid=iid,
