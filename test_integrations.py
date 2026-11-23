@@ -106,6 +106,28 @@ check("mac admin wrapper uses osascript", mitm._mac_admin_command(["bettercap"])
 ok, msg = mitm.RouteSession().start("192.168.1.5")
 check("start refuses cleanly without bettercap", ok is False and "bettercap" in msg.lower())
 
+print("netreg_probe (risk flags + banner parsing, pure):")
+import netreg_probe as probe
+check("telnet flagged as risky", "clear text" in probe.risk_for_port(23).lower())
+check("plain FTP flagged as risky", bool(probe.risk_for_port(21)))
+check("SMB 445 flagged as risky", bool(probe.risk_for_port(445)))
+check("https not risky by itself", probe.risk_for_port(443) == "")
+check("non-numeric port tolerated", probe.risk_for_port("nope") == "")
+check("web 200 with no login is a risk", bool(probe.web_risk({"status": 200})))
+check("web 401 (needs login) is NOT flagged", probe.web_risk({"status": 401}) == "")
+check("no web info => no web risk", probe.web_risk(None) == "")
+check("risk summary lists each risky port + web",
+      probe.summarize_risks([22, 23, 445], {"status": 200}) ==
+      ["Port 23: " + probe.RISKY_PORTS[23],
+       "Port 445: " + probe.RISKY_PORTS[445],
+       "Web interface with no login — anyone on the network can open it"])
+check("ssh banner parsed", probe.parse_banner(22, b"SSH-2.0-OpenSSH_9.6\r\n") == "SSH-2.0-OpenSSH_9.6")
+check("http Server header extracted",
+      probe.parse_banner(80, b"HTTP/1.1 200 OK\r\nServer: nginx/1.24.0\r\nX: y\r\n\r\n") == "nginx/1.24.0")
+check("empty banner => empty string", probe.parse_banner(22, b"") == "")
+check("control bytes stripped from banner",
+      "\x00" not in probe.parse_banner(21, b"220 \x00\x01FTP ready\r\n"))
+
 print("netreg_traffic (sniff-log parsing + grouping):")
 import netreg_traffic as nt
 _L = "[00:13:16] [net.sniff.udp] udp 192.178.24.10:https > host.local.:53273 180 bytes"
@@ -175,6 +197,32 @@ check("known persists across reload", _db2.is_known("aa:bb:cc:00:11:22") is True
 check("reloaded db is non-empty", len(_db2) == 1)
 check("corrupt/missing file loads as empty, no crash",
       len(ddb.DeviceDB(_os.path.join(tempfile.mkdtemp(), "nope.json"))) == 0)
+
+print("netreg_channels (congestion + best-channel, pure):")
+import netreg_channels as chan
+_nets = [
+    {"CH": "1", "Band": "2.4", "PWR": "-40"},
+    {"CH": "1", "Band": "2.4", "PWR": "-55"},
+    {"CH": "6", "Band": "2.4", "PWR": "-70"},
+    {"CH": "36", "Band": "5", "PWR": "-50"},
+]
+_r = chan.analyze(_nets)
+check("counts APs per band", _r["aps_24"] == 3 and _r["aps_5"] == 1)
+check("load table covers channels 1..11", [c for c, _n, _s in _r["load_24"]] == list(range(1, 12)))
+check("recommends a non-overlapping 2.4 channel", _r["best_24"][0] in chan.NON_OVERLAP_24)
+check("busy ch1 is not the recommendation", _r["best_24"][0] != 1)
+check("recommends 11 as the clear one here", _r["best_24"][0] == 11)
+check("5 GHz best picks an unused standard channel", _r["best_5"] and _r["best_5"][0] in chan.STD_5)
+check("empty scan still gives a safe 2.4 pick",
+      chan.analyze([])["best_24"][0] in chan.NON_OVERLAP_24)
+check("no 5 GHz networks => best_5 is None", chan.analyze([])["best_5"] is None)
+check("stronger neighbour raises congestion more",
+      chan.analyze([{"CH": "1", "Band": "2.4", "PWR": "-40"}])["load_24"][0][2] >
+      chan.analyze([{"CH": "1", "Band": "2.4", "PWR": "-85"}])["load_24"][0][2])
+check("overlap bleeds across adjacent 2.4 channels (ch3 feels ch1)",
+      chan.analyze([{"CH": "1", "Band": "2.4", "PWR": "-50"}])["load_24"][2][1] == 1)
+check("bad channel value is ignored, not crashing",
+      chan.analyze([{"CH": "x", "Band": "2.4", "PWR": "-50"}])["aps_24"] == 0)
 
 print()
 if fails:
