@@ -9,7 +9,8 @@ Status:
   * macOS  -- implemented (native scan + LAN device discovery; deauth needs a
               monitor-mode-capable USB adapter + the aircrack-ng suite).
   * Linux  -- implemented (aircrack-ng: airmon-ng / airodump-ng / aireplay-ng).
-  * Windows-- scan not yet wired; clear message instead of a silent failure.
+  * Windows-- implemented (native `netsh` Wi-Fi scan + LAN device discovery;
+              deauth not possible with standard Windows drivers).
 
 Network rows share these keys so the GUI table is stable across platforms:
   ESSID, PWR, CH, Band, Privacy, Cipher, Auth, BSSID, Beacons, IV
@@ -968,17 +969,414 @@ class LinuxBackend(Backend):
 
 
 # --------------------------------------------------------------------------- #
-#  Windows backend (placeholder with an honest message)
+#  Windows backend (native scan + LAN device discovery)
 # --------------------------------------------------------------------------- #
 class WindowsBackend(Backend):
+    """Windows support using tools that ship with Windows, so nothing extra has
+    to be installed:
+      * Network scan  -- `netsh wlan show networks mode=bssid` (sees neighbour
+        APs *with* their BSSIDs, which macOS hides).
+      * Device list   -- a LAN ping-sweep that fills the Windows ARP table,
+        then `arp -a` to read who answered.
+    Disconnecting (deauth) is NOT possible with standard Windows Wi-Fi drivers
+    (no monitor mode / packet injection), so it stays gated with an honest note.
+    Own-network / authorised use only, same as the other backends.
+    """
+
     name = "windows"
 
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._nets: list[dict] = []
+        self._net_note = "Ready."
+        self._scan_thread = None
+        self._scanning = False
+
+        self._devices: list[dict] = []
+        self._dev_note = "Ready."
+        self._dev_thread = None
+        self._dev_scanning = False
+        self._dev_target: dict = {}
+
+        # Keep results steady across sweeps so rows don't flicker in and out.
+        self._net_seen = SeenTracker(ttl=20.0, keys=("BSSID", "ESSID"))
+        self._dev_seen = SeenTracker(ttl=30.0, keys=("MAC", "IP"))
+        self._mdns_cache: dict = {}
+
+    # ---- capabilities ----------------------------------------------------- #
     def capabilities(self) -> Capabilities:
-        msg = ("Windows support is not wired up yet. Standard Windows Wi-Fi "
-               "drivers cannot do monitor mode or packet injection, so "
-               "disconnecting devices will require a specific USB adapter. "
-               "Scanning/LAN discovery is planned next.")
-        return Capabilities(scan_note=msg, device_note=msg, deauth_note=msg)
+        deauth_note = (
+            "Disconnecting a device is not possible with a standard Windows "
+            "Wi-Fi adapter: the built-in drivers cannot do monitor mode or "
+            "packet injection. It needs a special USB adapter with injection-"
+            "capable drivers (and, in practice, a Linux/aircrack setup). "
+            "Scanning and listing devices work without any of that."
+        )
+        return Capabilities(
+            can_scan=True,
+            can_list_devices=True,
+            can_deauth=False,
+            scan_note="Scanning nearby networks with the built-in Windows Wi-Fi tools.",
+            device_note=(
+                "Listing devices on the network you are connected to (LAN scan). "
+                "Seeing clients of other nearby networks needs a monitor-mode adapter."
+            ),
+            deauth_note=deauth_note,
+        )
+
+    # ---- network scanning ------------------------------------------------- #
+    @staticmethod
+    def _pct_to_dbm(pct: int) -> str:
+        """netsh reports signal as a 0-100% quality. Convert to the rough dBm
+        Windows itself uses (dBm = pct/2 - 100) so the PWR column sorts the same
+        way as the macOS/Linux backends (higher/less-negative = stronger)."""
+        try:
+            return str(int(pct) // 2 - 100)
+        except Exception:
+            return ""
+
+    @staticmethod
+    def _parse_netsh_networks(text: str) -> list[dict]:
+        """Parse `netsh wlan show networks mode=bssid` into network rows. Pure and
+        locale-tolerant where it can be: SSID/BSSID/Signal/Band are anchored on
+        value shapes (a MAC, an N% signal, 'N GHz'), while Channel/Authentication/
+        Encryption use the English labels. One row per BSSID, so a mesh/extender
+        shows every AP rather than being collapsed. Unit-testable offline."""
+        rows: list[dict] = []
+        cur_ssid: str | None = None
+        auth = ""
+        enc = ""
+        pending: dict | None = None
+
+        def flush():
+            nonlocal pending
+            if pending is not None:
+                rows.append(pending)
+                pending = None
+
+        for raw in (text or "").splitlines():
+            line = raw.rstrip()
+            m = re.match(r"^\s*SSID\s+\d+\s*:\s?(.*)$", line)
+            if m:
+                flush()
+                cur_ssid = m.group(1).strip()
+                auth = enc = ""
+                continue
+            m = re.match(r"^\s*Authentication\s*:\s*(.+)$", line)
+            if m:
+                auth = m.group(1).strip()
+                continue
+            m = re.match(r"^\s*Encryption\s*:\s*(.+)$", line)
+            if m:
+                enc = m.group(1).strip()
+                continue
+            m = re.match(r"^\s*BSSID\s+\d+\s*:\s*([0-9A-Fa-f:]{17})\s*$", line)
+            if m:
+                flush()
+                pending = _empty_net(
+                    ESSID=(cur_ssid or ""), BSSID=m.group(1).lower(),
+                    Privacy=auth, Cipher=enc, Auth=auth,
+                )
+                continue
+            if pending is None:
+                continue
+            sm = re.search(r":\s*(\d+)\s*%", line)
+            if sm and "Signal" in line:
+                pending["PWR"] = WindowsBackend._pct_to_dbm(int(sm.group(1)))
+                continue
+            cm = re.match(r"^\s*Channel\s*:\s*(\d+)", line)
+            if cm:
+                pending["CH"] = cm.group(1)
+                if not pending.get("Band"):
+                    pending["Band"] = _channel_to_band(cm.group(1))
+                continue
+            bm = re.search(r":\s*([\d.]+)\s*GHz", line)
+            if bm:
+                # netsh prints '2.4 GHz' / '5 GHz' / '6 GHz' -> use as-is.
+                pending["Band"] = bm.group(1)
+                continue
+        flush()
+        # Drop nameless (hidden) networks so no blank row shows.
+        return [r for r in rows if r["ESSID"]]
+
+    def _scan_once(self) -> tuple[list[dict], str]:
+        try:
+            r = subprocess.run(
+                ["netsh", "wlan", "show", "networks", "mode=bssid"],
+                capture_output=True, text=True, timeout=25,
+            )
+        except Exception as e:
+            return [], f"Scan error: {e}"
+        out = r.stdout or ""
+        if r.returncode != 0 or not out.strip():
+            err = (r.stderr or "").strip()
+            if "not running" in (out + err).lower() or "wlan" in err.lower():
+                return [], ("Could not read Wi-Fi: the WLAN AutoConfig service "
+                            "may be off, or there is no Wi-Fi adapter.")
+            return [], "Could not read Wi-Fi networks from netsh."
+        rows = self._parse_netsh_networks(out)
+        rows.sort(key=_pwr, reverse=True)
+        return rows, f"Found {len(rows)} access point(s) via Windows Wi-Fi tools."
+
+    def start_scan(self):
+        self._scanning = True
+        self._net_seen.reset()
+        with self._lock:
+            self._net_note = "Scanning nearby networks…"
+        if self._scan_thread and self._scan_thread.is_alive():
+            return
+        self._scan_thread = threading.Thread(target=self._scan_loop, daemon=True)
+        self._scan_thread.start()
+
+    def _scan_loop(self):
+        while self._scanning:
+            rows, note = self._scan_once()
+            rows = sorted(self._net_seen.update(rows), key=_pwr, reverse=True)
+            with self._lock:
+                self._nets = rows
+                self._net_note = note
+            for _ in range(20):
+                if not self._scanning:
+                    break
+                time.sleep(0.1)
+
+    def snapshot_networks(self) -> tuple[list[dict], str]:
+        with self._lock:
+            return list(self._nets), self._net_note
+
+    def stop_scan(self):
+        self._scanning = False
+
+    # ---- device listing (LAN scan of the connected network) --------------- #
+    def device_columns(self) -> tuple[str, ...]:
+        return ("IP", "MAC", "Vendor", "Hostname")
+
+    @staticmethod
+    def _local_ipv4() -> str:
+        """Primary outbound IPv4 of this machine. The UDP 'connect' only picks a
+        route; it sends no packets, so it is instant and needs no network."""
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            s.connect(("8.8.8.8", 80))
+            return s.getsockname()[0]
+        except Exception:
+            return ""
+        finally:
+            try:
+                s.close()
+            except Exception:
+                pass
+
+    @staticmethod
+    def _ipv4_prefix(ip: str) -> int:
+        """Prefix length of the interface that holds `ip`, asked of Windows in a
+        locale-independent way. Falls back to /24 (the near-universal home
+        subnet) if PowerShell isn't available or returns something odd."""
+        if not ip:
+            return 24
+        try:
+            out = subprocess.run(
+                ["powershell", "-NoProfile", "-Command",
+                 f"(Get-NetIPAddress -AddressFamily IPv4 -IPAddress {ip})"
+                 f".PrefixLength"],
+                capture_output=True, text=True, timeout=8,
+            ).stdout.strip()
+            for tok in out.splitlines():
+                n = int(tok.strip())
+                if 8 <= n <= 30:
+                    return n
+        except Exception:
+            pass
+        return 24
+
+    @staticmethod
+    def _read_arp() -> str:
+        """Current ARP table text (hosts that have answered so far)."""
+        return subprocess.run(["arp", "-a"], capture_output=True,
+                              text=True, timeout=10).stdout
+
+    @staticmethod
+    def _arp_rows_windows(arp_text: str, net) -> list[dict]:
+        """Parse Windows `arp -a` output into device rows inside `net`. Windows
+        formats a line as '  192.168.1.1   aa-bb-cc-dd-ee-ff   dynamic' (dashed
+        MAC). Pure, so it's unit-testable without touching the network."""
+        rows, seen = [], set()
+        for line in (arp_text or "").splitlines():
+            m = re.search(r"(\d+\.\d+\.\d+\.\d+)\s+([0-9A-Fa-f]{2}(?:-[0-9A-Fa-f]{2}){5})",
+                          line)
+            if not m:
+                continue
+            dip = m.group(1)
+            mac = m.group(2).replace("-", ":").lower()
+            # Skip broadcast and multicast (IPv4 multicast MACs start 01:00:5e,
+            # IPv6-over-Ethernet 33:33, broadcast ff:ff...).
+            if mac == "ff:ff:ff:ff:ff:ff" or mac.startswith(("01:00:5e", "33:33")):
+                continue
+            try:
+                addr = ipaddress.IPv4Address(dip)
+            except Exception:
+                continue
+            if addr not in net or addr == net.broadcast_address or addr == net.network_address:
+                continue
+            if dip in seen:
+                continue
+            seen.add(dip)
+            rows.append({"IP": dip, "MAC": mac, "Vendor": vendor_for_mac(mac),
+                         "Hostname": ""})
+        return rows
+
+    def start_devices(self, target: dict):
+        self._dev_target = target or {}
+        self._dev_scanning = True
+        self._dev_seen.reset()
+        self._mdns_cache = {}
+        with self._lock:
+            self._dev_note = "Scanning the local network… (pinging every address, ~10–15s)"
+        if self._dev_thread and self._dev_thread.is_alive():
+            return
+        self._dev_thread = threading.Thread(target=self._dev_loop, daemon=True)
+        self._dev_thread.start()
+
+    def _dev_loop(self):
+        while self._dev_scanning:
+            rows, note = self._lan_scan()
+            rows = self._dev_seen.update(rows)
+            rows.sort(key=lambda r: tuple(int(x) for x in r["IP"].split("."))
+                      if r.get("IP") else (0,))
+            if rows:
+                note = (f"{len(rows)} device(s) on the network "
+                        f"(kept for ~30s so nothing flickers).")
+            with self._lock:
+                self._devices = rows
+                self._dev_note = note
+            for _ in range(30):
+                if not self._dev_scanning:
+                    break
+                time.sleep(0.1)
+
+    def _publish_devices(self, rows, note=None):
+        merged = self._dev_seen.update(rows)
+        merged.sort(key=lambda r: tuple(int(x) for x in r["IP"].split("."))
+                    if r.get("IP") else (0,))
+        with self._lock:
+            self._devices = merged
+            if note is not None:
+                self._dev_note = note
+        return merged
+
+    def _lan_scan(self) -> tuple[list[dict], str]:
+        ip = self._local_ipv4()
+        if not ip:
+            return [], "Not connected to a network."
+        prefix = self._ipv4_prefix(ip)
+        try:
+            net = ipaddress.IPv4Network(f"{ip}/{prefix}", strict=False)
+        except Exception:
+            net = ipaddress.IPv4Network(f"{ip}/24", strict=False)
+
+        hosts = list(net.hosts())
+        if len(hosts) > 254:
+            hosts = hosts[:254]
+        total = len(hosts)
+
+        progress_lock = threading.Lock()
+        done = {"n": 0}
+
+        def ping(h):
+            # -n 1: one echo, -w 1000: 1s timeout. Hide the window/output.
+            subprocess.run(["ping", "-n", "1", "-w", "1000", str(h)],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            with progress_lock:
+                done["n"] += 1
+
+        pings_done = threading.Event()
+
+        def run_pings():
+            try:
+                with ThreadPoolExecutor(max_workers=min(256, total or 1)) as ex:
+                    list(ex.map(ping, hosts))
+            finally:
+                pings_done.set()
+
+        threading.Thread(target=run_pings, daemon=True).start()
+
+        # Publish whatever's in the ARP table while the pings run, so devices
+        # show up as they answer rather than all at the end.
+        while not pings_done.wait(0.5):
+            if not self._dev_scanning:
+                break
+            try:
+                partial = self._arp_rows_windows(self._read_arp(), net)
+            except Exception:
+                partial = []
+            with progress_lock:
+                n = done["n"]
+            if partial:
+                self._publish_devices(
+                    partial,
+                    f"Scanning… {len(partial)} device(s) so far "
+                    f"({n}/{total} addresses checked)")
+            else:
+                with self._lock:
+                    self._dev_note = f"Scanning the network… {n}/{total} addresses"
+
+        with self._lock:
+            self._dev_note = "Reading the device (ARP) table…"
+        try:
+            arp = self._read_arp()
+        except Exception as e:
+            return [], f"ARP read failed: {e}"
+        rows = self._arp_rows_windows(arp, net)
+
+        # Best-effort reverse DNS, bounded so a slow resolver can't hang.
+        if rows:
+            with self._lock:
+                self._dev_note = f"Found {len(rows)} device(s); resolving names…"
+
+        def resolve(row):
+            try:
+                row["Hostname"] = socket.gethostbyaddr(row["IP"])[0]
+            except Exception:
+                row["Hostname"] = ""
+        old_timeout = socket.getdefaulttimeout()
+        socket.setdefaulttimeout(1.0)
+        try:
+            with ThreadPoolExecutor(max_workers=32) as ex:
+                list(ex.map(resolve, rows))
+        finally:
+            socket.setdefaulttimeout(old_timeout)
+
+        # Enrich with vendor (optional libs) and mDNS friendly names, offline-safe.
+        if integrations is not None:
+            if not self._mdns_cache:
+                try:
+                    self._mdns_cache = integrations.mdns_names(3.0)
+                except Exception:
+                    self._mdns_cache = {}
+            for r in rows:
+                if not r.get("Vendor"):
+                    try:
+                        r["Vendor"] = integrations.vendor_for_mac(r.get("MAC", ""))
+                    except Exception:
+                        r["Vendor"] = ""
+                if not r.get("Hostname"):
+                    fn = self._mdns_cache.get(r["IP"], "")
+                    if fn:
+                        r["Hostname"] = fn
+        else:
+            for r in rows:
+                r.setdefault("Vendor", "")
+
+        rows.sort(key=lambda r: tuple(int(x) for x in r["IP"].split(".")))
+        note = f"{len(rows)} device(s) on {net.with_prefixlen}."
+        return rows, note
+
+    def snapshot_devices(self) -> tuple[list[dict], str]:
+        with self._lock:
+            return list(self._devices), self._dev_note
+
+    def stop_devices(self):
+        self._dev_scanning = False
 
 
 def _pwr(n: dict) -> int:
