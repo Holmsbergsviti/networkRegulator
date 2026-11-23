@@ -67,6 +67,9 @@ class DevicesUI(tk.Toplevel):
         self.route_btn = ttk.Button(actions, text="Route via this Mac",
                                     command=self.route_selected)
         self.route_btn.pack(side="left")
+        self.cut_btn = ttk.Button(actions, text="Cut off internet",
+                                  style="Danger.TButton", command=self.cut_selected)
+        self.cut_btn.pack(side="left", padx=(8, 0))
         self.disc_btn = ttk.Button(actions, text="Disconnect Selected", style="Danger.TButton",
                                    command=self.disconnect_selected)
         self.disc_btn.pack(side="left", padx=(8, 0))
@@ -78,6 +81,7 @@ class DevicesUI(tk.Toplevel):
             self._can_route = False
         if not self._can_route:
             self.route_btn.config(state="disabled")
+            self.cut_btn.config(state="disabled")
         if not self.caps.can_deauth:
             self.disc_btn.config(state="disabled")
 
@@ -114,7 +118,9 @@ class DevicesUI(tk.Toplevel):
             import netreg_mitm as _m
             if _m.available() and ("IP" in self.columns):
                 foot += ("   “Route via this Mac” sends a selected device's "
-                         "traffic through this computer (own-network use only).")
+                         "traffic through this computer; “Cut off internet” "
+                         "intercepts it without forwarding, so the device loses "
+                         "its connection (own-network use only).")
         except Exception:
             pass
         if not self.caps.can_deauth:
@@ -228,18 +234,27 @@ class DevicesUI(tk.Toplevel):
         return row.get("Station MAC") or row.get("MAC")
 
     def route_selected(self):
+        """Route the selected device's traffic through this Mac (and keep
+        forwarding it, so the device still works)."""
+        self._open_route(cut=False)
+
+    def cut_selected(self):
+        """Cut the selected device off: intercept its traffic but DON'T forward
+        it to the router, so it loses its connection while staying on Wi-Fi."""
+        self._open_route(cut=True)
+
+    def _open_route(self, cut=False):
+        what = "cut a device off" if cut else "route a device's traffic"
         if not getattr(self, "_can_route", False):
             messagebox.showinfo(
                 "Not available",
-                "Routing traffic through this machine needs bettercap "
-                "(install it with: brew install bettercap) and a device with "
-                "an IP address.")
+                f"This needs bettercap (install it with: brew install "
+                f"bettercap) and a device with an IP address.")
             return
         sel = self.tree.selection()
         if not sel or sel[0] == self._empty_iid:
             messagebox.showinfo("Pick a device",
-                                "Select a device first to route its traffic "
-                                "through this Mac.")
+                                f"Select a device first to {what}.")
             return
         row = dict(zip(self.columns, self.tree.item(sel[0], "values")))
         ip = row.get("IP", "")
@@ -248,18 +263,23 @@ class DevicesUI(tk.Toplevel):
             return
         mac = row.get("MAC") or row.get("Station MAC") or ""
         host = row.get("Hostname", "")
-        self.set_status(f"Opening route window for {ip}…", "work")
+        win_name = "cut-off" if cut else "route"
+        self.set_status(f"Opening {win_name} window for {ip}…", "work")
         # Open in-process so it appears instantly; fall back to a subprocess,
         # then a visible error, rather than silently doing nothing.
         try:
             import mitm_window
-            mitm_window.open_route(self, ip, mac, host)
+            mitm_window.open_route(self, ip, mac, host, cut=cut)
         except Exception as e:
             try:
-                subprocess.Popen([sys.executable, "mitm_window.py", ip, mac, host])
+                argv = [sys.executable, "mitm_window.py", ip, mac, host]
+                if cut:
+                    argv.append("--cut")
+                subprocess.Popen(argv)
             except Exception:
-                messagebox.showerror("Couldn't open Route window",
-                                     f"Opening the route window for {ip} failed:\n\n{e}")
+                messagebox.showerror(f"Couldn't open {win_name} window",
+                                     f"Opening the {win_name} window for {ip} "
+                                     f"failed:\n\n{e}")
 
     def disconnect_selected(self):
         if not self.caps.can_deauth:

