@@ -76,6 +76,16 @@ check("sniff scopes capture to the target (BPF host filter)",
       "set net.sniff.filter host 10.0.0.5" in mitm.build_eval("10.0.0.5", sniff=True))
 check("no sniff => no net.sniff", "net.sniff" not in mitm.build_eval("10.0.0.5", sniff=False))
 check("fullduplex false honored", "fullduplex false" in mitm.build_eval("10.0.0.5", full_duplex=False))
+check("default (no ban) uses arp.spoof, not arp.ban",
+      "arp.spoof on" in mitm.build_eval("10.0.0.5")
+      and "arp.ban" not in mitm.build_eval("10.0.0.5"))
+check("ban mode uses arp.ban (intercept, don't forward)",
+      "arp.ban on" in mitm.build_eval("10.0.0.5", ban=True)
+      and "arp.spoof on" not in mitm.build_eval("10.0.0.5", ban=True))
+check("ban still targets the one IP (no subnet-wide ban)",
+      "set arp.spoof.targets 10.0.0.5" in mitm.build_eval("10.0.0.5", ban=True))
+check("ban flag flows through build_argv",
+      "arp.ban on" in mitm.build_argv("10.0.0.5", ban=True)[-1])
 check("admin cmd with log redirects bettercap output to it",
       "&>" in mitm._mac_admin_command(["bettercap"], "/tmp/t.log")[2]
       and "/tmp/t.log" in mitm._mac_admin_command(["bettercap"], "/tmp/t.log")[2])

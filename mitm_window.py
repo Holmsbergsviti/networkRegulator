@@ -27,21 +27,28 @@ import netreg_traffic as nt
 # clean text.
 _ANSI = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
 
-def open_route(master, ip="", mac="", hostname=""):
+def open_route(master, ip="", mac="", hostname="", cut=False):
     """Open the route/MITM window in the current process as a child window, so
-    it appears immediately instead of starting a separate program."""
-    win = MitmUI(master, ip, mac, hostname)
+    it appears immediately instead of starting a separate program.
+
+    `cut=True` opens it in "cut off" mode: intercept the device's traffic but
+    do NOT forward it to the router, so the device loses its connection."""
+    win = MitmUI(master, ip, mac, hostname, cut)
     ui.raise_window(win, master)
     return win
 
 
 class MitmUI(tk.Toplevel):
-    def __init__(self, master, ip="", mac="", hostname=""):
+    def __init__(self, master, ip="", mac="", hostname="", cut=False):
         super().__init__(master)
         self.ip = ip or ""
         self.mac = mac or ""
         self.hostname = hostname or ""
-        self.title(f"Route traffic through this Mac — {self.ip or '(no target)'}")
+        self.cut = bool(cut)
+        if self.cut:
+            self.title(f"Cut off device — {self.ip or '(no target)'}")
+        else:
+            self.title(f"Route traffic through this Mac — {self.ip or '(no target)'}")
         self.geometry("640x700")
         self.minsize(560, 560)
         ui.apply_theme(self)
@@ -54,12 +61,20 @@ class MitmUI(tk.Toplevel):
 
         # --- authorization banner ----------------------------------------- #
         base, bold, title, small, mono = ui.fonts()
+        if self.cut:
+            banner_text = ("⚠  OWN-NETWORK / AUTHORIZED USE ONLY\n"
+                           "This makes your Mac pretend to be the router and then "
+                           "DROPS this device's traffic instead of passing it on, "
+                           "so the device loses its internet while staying on the "
+                           "Wi-Fi. Only do this on a network you own or are "
+                           "explicitly allowed to test.")
+        else:
+            banner_text = ("⚠  OWN-NETWORK / AUTHORIZED USE ONLY\n"
+                           "This makes your Mac pretend to be the router so this "
+                           "device's traffic flows through you. Only do this on a "
+                           "network you own or are explicitly allowed to test.")
         banner = tk.Label(
-            self,
-            text=("⚠  OWN-NETWORK / AUTHORIZED USE ONLY\n"
-                  "This makes your Mac pretend to be the router so this device's "
-                  "traffic flows through you. Only do this on a network you own "
-                  "or are explicitly allowed to test."),
+            self, text=banner_text,
             bg=ui.DANGER, fg="white", justify="left", wraplength=560,
             padx=16, pady=12, font=base, anchor="w",
         )
@@ -78,7 +93,10 @@ class MitmUI(tk.Toplevel):
         self.sniff = tk.BooleanVar(value=True)
         ttk.Checkbutton(opts, text="Full duplex (also spoof the router)",
                         variable=self.full_duplex).pack(anchor="w")
-        ttk.Checkbutton(opts, text="Show a live summary of the redirected traffic",
+        sniff_text = ("Show a live summary of what the device tries to reach"
+                      if self.cut else
+                      "Show a live summary of the redirected traffic")
+        ttk.Checkbutton(opts, text=sniff_text,
                         variable=self.sniff).pack(anchor="w")
 
         self.authorized = tk.BooleanVar(value=False)
@@ -88,7 +106,8 @@ class MitmUI(tk.Toplevel):
         ).pack(anchor="w", padx=14, pady=(8, 2))
 
         bar = ttk.Frame(self); bar.pack(fill="x", padx=12, pady=8)
-        self.start_btn = ttk.Button(bar, text="Start routing", style="Accent.TButton",
+        start_text = "Start cutting off" if self.cut else "Start routing"
+        self.start_btn = ttk.Button(bar, text=start_text, style="Accent.TButton",
                                     command=self.start, state="disabled")
         self.start_btn.pack(side="left")
         self.stop_btn = ttk.Button(bar, text="Stop & restore", style="Danger.TButton",
@@ -134,10 +153,16 @@ class MitmUI(tk.Toplevel):
         self.show_raw = tk.BooleanVar(value=False)
         ttk.Checkbutton(bottom, text="Show raw packets instead of the grouped summary",
                         variable=self.show_raw, command=self._toggle_view).pack(anchor="w")
-        self.hint_var = tk.StringVar(
-            value=("Start routing to see which servers this device talks to. "
-                   "HTTPS stays encrypted, so you'll see the servers and how "
-                   "much data — not page contents."))
+        if self.cut:
+            hint_default = ("Start cutting off to drop this device's connection. "
+                            "Its traffic reaches this Mac but is not passed on to "
+                            "the router, so it can't reach the internet or the LAN "
+                            "until you press Stop.")
+        else:
+            hint_default = ("Start routing to see which servers this device talks "
+                            "to. HTTPS stays encrypted, so you'll see the servers "
+                            "and how much data — not page contents.")
+        self.hint_var = tk.StringVar(value=hint_default)
         ttk.Label(self, textvariable=self.hint_var, wraplength=580,
                   justify="left", foreground="gray").pack(fill="x", padx=12, pady=(0, 8))
 
@@ -263,11 +288,16 @@ class MitmUI(tk.Toplevel):
         self.stop_btn.config(state="normal" if running and not self.busy else "disabled")
 
     def start(self):
-        if not messagebox.askyesno(
-            "Confirm",
-            f"Route {self.ip}'s traffic through this Mac now?\n\n"
-            "Only proceed on a network you own or are authorized to test.",
-        ):
+        if self.cut:
+            prompt = (f"Cut {self.ip} off the network now?\n\n"
+                      "Its traffic will reach this Mac but won't be forwarded to "
+                      "the router, so the device loses its connection until you "
+                      "press Stop. Only proceed on a network you own or are "
+                      "authorized to test.")
+        else:
+            prompt = (f"Route {self.ip}'s traffic through this Mac now?\n\n"
+                      "Only proceed on a network you own or are authorized to test.")
+        if not messagebox.askyesno("Confirm", prompt):
             return
         self.busy = True
         self._sync_buttons()
@@ -275,7 +305,7 @@ class MitmUI(tk.Toplevel):
 
         def worker():
             ok, msg = self.session.start(self.ip, full_duplex=self.full_duplex.get(),
-                                         sniff=self.sniff.get())
+                                         sniff=self.sniff.get(), ban=self.cut)
             def done():
                 self.busy = False
                 self.status_var.set(msg)
@@ -312,11 +342,13 @@ class MitmUI(tk.Toplevel):
 
 
 if __name__ == "__main__":
-    IP = sys.argv[1] if len(sys.argv) > 1 else ""
-    MAC = sys.argv[2] if len(sys.argv) > 2 else ""
-    HOSTNAME = sys.argv[3] if len(sys.argv) > 3 else ""
+    CUT = "--cut" in sys.argv
+    args = [a for a in sys.argv[1:] if a != "--cut"]
+    IP = args[0] if len(args) > 0 else ""
+    MAC = args[1] if len(args) > 1 else ""
+    HOSTNAME = args[2] if len(args) > 2 else ""
     root = tk.Tk()
     root.withdraw()  # the Toplevel below is the visible window
-    win = MitmUI(root, IP, MAC, HOSTNAME)
+    win = MitmUI(root, IP, MAC, HOSTNAME, CUT)
     win.protocol("WM_DELETE_WINDOW", lambda: (win._on_close(), root.destroy()))
     root.mainloop()
