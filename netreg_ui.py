@@ -164,26 +164,26 @@ def header(parent, title_text, subtitle=""):
 def raise_window(win, master=None):
     """Bring a newly-opened child window reliably to the front.
 
-    A plain lift()/focus_force() isn't enough on macOS: a new window often
-    stays *behind* a large parent (e.g. the device list), so it looks like the
-    click did nothing. We offset it from the parent so it's clearly its own
-    window, then pulse -topmost to force it above everything, then release it
-    so it behaves like a normal window afterwards.
+    A plain lift() isn't always enough on macOS: a new window can open
+    *behind* a large parent (e.g. the device list), so the click looks like it
+    did nothing. We lift it and pulse -topmost for a moment so it jumps above
+    the parent, then release it so it behaves like a normal window afterwards.
+
+    We deliberately do NOT move the window with an explicit geometry here: on a
+    multi-display or Retina Mac, offsetting from the parent's root coordinates
+    could place the child partly or fully off-screen, which looked exactly like
+    "the window didn't open". Let Tk place it; just make sure it's on top.
+
+    `master` is accepted for call-compatibility but no longer used.
     """
     try:
-        win.update_idletasks()
-        if master is not None:
-            try:
-                x = master.winfo_rootx() + 48
-                y = master.winfo_rooty() + 48
-                win.geometry(f"+{max(x, 0)}+{max(y, 0)}")
-            except Exception:
-                pass
         win.deiconify()
         win.lift()
-        win.attributes("-topmost", True)
-        win.after(500, lambda: _drop_topmost(win))
         win.focus_force()
+        win.attributes("-topmost", True)
+        # Release topmost shortly after so it's a normal window, not a floating
+        # always-on-top one. A brief delay is enough to win the raise on macOS.
+        win.after(300, lambda: _drop_topmost(win))
     except Exception:
         pass
 

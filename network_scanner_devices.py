@@ -212,12 +212,20 @@ class DevicesUI(tk.Toplevel):
         # Open in-process so the window appears instantly. Spawning a fresh
         # python process (the old behaviour) cost a noticeable lag on macOS,
         # especially from a cloud-synced folder. Fall back to a subprocess if
-        # anything about the in-process path fails.
+        # the in-process path fails, and surface a visible error if BOTH fail,
+        # so a double-click can never silently do nothing.
         try:
             import device_detail
             device_detail.open_detail(self, ip, mac, hostname)
-        except Exception:
-            subprocess.Popen([sys.executable, "device_detail.py", ip, mac, hostname])
+            self.set_status("Opened device details.", "ok")
+        except Exception as e:
+            try:
+                subprocess.Popen([sys.executable, "device_detail.py", ip, mac, hostname])
+            except Exception:
+                self.set_status(f"Couldn't open device details: {e}", "error")
+                messagebox.showerror(
+                    "Couldn't open device details",
+                    f"Opening the details window for {ip or mac} failed:\n\n{e}")
 
     def _selected_station(self):
         sel = self.tree.selection()
