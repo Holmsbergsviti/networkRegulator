@@ -224,6 +224,32 @@ check("overlap bleeds across adjacent 2.4 channels (ch3 feels ch1)",
 check("bad channel value is ignored, not crashing",
       chan.analyze([{"CH": "x", "Band": "2.4", "PWR": "-50"}])["aps_24"] == 0)
 
+print("netreg_backend device scan (ARP parse + live publish, pure):")
+import ipaddress as _ipaddr
+import netreg_backend as _nb
+_net = _ipaddr.IPv4Network("192.168.1.0/24")
+_arp = ("? (192.168.1.1) at 60:32:b1:0d:bb:d2 on en0 ifscope [ethernet]\n"
+        "? (192.168.1.50) at a4:83:e7:aa:bb:cc on en0 ifscope [ethernet]\n"
+        "? (192.168.1.99) at (incomplete) on en0\n"
+        "? (10.0.0.9) at 11:22:33:44:55:66 on en0\n")
+_rows = _nb.MacBackend._arp_rows(_arp, _net)
+check("ARP parse keeps only in-net complete entries",
+      sorted(r["IP"] for r in _rows) == ["192.168.1.1", "192.168.1.50"])
+check("ARP parse drops 'incomplete' entries",
+      all(r["IP"] != "192.168.1.99" for r in _rows))
+check("ARP parse drops addresses outside the subnet",
+      all(r["IP"] != "10.0.0.9" for r in _rows))
+check("ARP parse fills a Vendor field", all("Vendor" in r for r in _rows))
+check("ARP parse of empty text => no rows", _nb.MacBackend._arp_rows("", _net) == [])
+_bk = _nb.MacBackend()
+_bk._dev_seen.reset()
+_bk._publish_devices([{"IP": "192.168.1.50", "MAC": "a", "Vendor": "", "Hostname": ""}])
+_bk._publish_devices([{"IP": "192.168.1.5", "MAC": "b", "Vendor": "", "Hostname": ""}])
+_pub, _ = _bk.snapshot_devices()
+check("publish merges across calls (cross-sweep stability)", len(_pub) == 2)
+check("publish returns devices sorted by IP",
+      [d["IP"] for d in _pub] == ["192.168.1.5", "192.168.1.50"])
+
 print()
 if fails:
     print(f"{len(fails)}/{double} FAILED: {fails}")
