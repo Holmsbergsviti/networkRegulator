@@ -176,6 +176,28 @@ check("falls back to IP when MAC is blank",
 _tr2.reset()
 check("reset clears kept items", len(_tr2.update([])) == 0)
 
+print("netreg_devicedb (labels + new-device memory, persisted):")
+import tempfile, os as _os
+import netreg_devicedb as ddb
+_dbpath = _os.path.join(tempfile.mkdtemp(), "devices.json")
+_db = ddb.DeviceDB(_dbpath)
+check("empty db has length 0", len(_db) == 0)
+check("first mark_seen reports NEW", _db.mark_seen("AA:BB:CC:00:11:22") is True)
+check("second mark_seen of same MAC is not new", _db.mark_seen("aa:bb:cc:00:11:22") is False)
+check("MAC match is case-insensitive", _db.is_known("Aa:Bb:Cc:00:11:22") is True)
+check("unknown MAC is not known", _db.is_known("99:99:99:99:99:99") is False)
+check("blank MAC never new / never known",
+      _db.mark_seen("") is False and _db.is_known("") is False)
+check("broadcast MAC rejected", ddb.normalize_mac("ff:ff:ff:ff:ff:ff") == "")
+_db.set_label("aa:bb:cc:00:11:22", "Living-room TV")
+check("label set and read back", _db.label("AA:BB:CC:00:11:22") == "Living-room TV")
+_db2 = ddb.DeviceDB(_dbpath)  # reload from disk
+check("label persists across reload", _db2.label("aa:bb:cc:00:11:22") == "Living-room TV")
+check("known persists across reload", _db2.is_known("aa:bb:cc:00:11:22") is True)
+check("reloaded db is non-empty", len(_db2) == 1)
+check("corrupt/missing file loads as empty, no crash",
+      len(ddb.DeviceDB(_os.path.join(tempfile.mkdtemp(), "nope.json"))) == 0)
+
 print("netreg_channels (congestion + best-channel, pure):")
 import netreg_channels as chan
 _nets = [

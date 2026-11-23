@@ -1,0 +1,131 @@
+"""
+netreg_devicedb.py -- tiny persistent store of the devices we've seen.
+
+Keyed by MAC address, it remembers two things the GUI wants to survive
+restarts:
+
+  * a custom label you give a device ("Living-room TV", "Dad's laptop"), and
+  * whether we've seen this device before, so a brand-new one can be called
+    out when it first joins.
+
+It's a single JSON file in the user's config area. All the logic is pure and
+unit-tested with a temp path; the only I/O is load()/save() reading and writing
+that one file, each wrapped so a missing/corrupt file degrades to "empty" and
+never crashes the app.
+"""
+from __future__ import annotations
+
+import json
+import os
+import sys
+import time
+
+
+def default_path() -> str:
+    """Per-user JSON file path, following each OS's convention."""
+    if sys.platform == "darwin":
+        base = os.path.join(os.path.expanduser("~"), "Library",
+                            "Application Support", "NetworkRegulator")
+    elif os.name == "nt":
+        base = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")),
+                            "NetworkRegulator")
+    else:
+        base = os.path.join(os.environ.get("XDG_CONFIG_HOME",
+                            os.path.join(os.path.expanduser("~"), ".config")),
+                            "networkregulator")
+    return os.path.join(base, "devices.json")
+
+
+def normalize_mac(mac: str) -> str:
+    """Lower-case, trim; "" for anything that isn't usable as a key."""
+    m = (mac or "").strip().lower()
+    return m if m and m != "ff:ff:ff:ff:ff:ff" else ""
+
+
+class DeviceDB:
+    def __init__(self, path: str | None = None, clock=time.time):
+        self.path = path or default_path()
+        self._clock = clock
+        self._data: dict[str, dict] = {}
+        self.load()
+
+    # ---- persistence ------------------------------------------------------
+    def load(self):
+        self._data = {}
+        try:
+            with open(self.path, "r", encoding="utf-8") as f:
+                raw = json.load(f)
+            if isinstance(raw, dict):
+                # keep only well-formed entries
+                for mac, rec in raw.items():
+                    if isinstance(rec, dict):
+                        self._data[normalize_mac(mac)] = {
+                            "label": str(rec.get("label", "")),
+                            "first_seen": rec.get("first_seen"),
+                            "last_seen": rec.get("last_seen"),
+                        }
+        except Exception:
+            self._data = {}
+        self._data.pop("", None)
+
+    def save(self) -> bool:
+        try:
+            os.makedirs(os.path.dirname(self.path), exist_ok=True)
+            tmp = self.path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(self._data, f, indent=2, sort_keys=True)
+            os.replace(tmp, self.path)
+            return True
+        except Exception:
+            return False
+
+    def __len__(self) -> int:
+        return len(self._data)
+
+    # ---- labels (feature: custom device labels) ---------------------------
+    def label(self, mac: str) -> str:
+        return self._data.get(normalize_mac(mac), {}).get("label", "")
+
+    def set_label(self, mac: str, text: str, save: bool = True) -> bool:
+        key = normalize_mac(mac)
+        if not key:
+            return False
+        rec = self._data.setdefault(key, {"label": "", "first_seen": None,
+                                          "last_seen": None})
+        rec["label"] = (text or "").strip()
+        if save:
+            self.save()
+        return True
+
+    # ---- known / new (feature: new-device alerts) -------------------------
+    def is_known(self, mac: str) -> bool:
+        key = normalize_mac(mac)
+        return bool(key) and self._data.get(key, {}).get("first_seen") is not None
+
+    def mark_seen(self, mac: str) -> bool:
+        """Record that `mac` is present now. Returns True if this is the FIRST
+        time we've ever seen it (i.e. a new device), else False. Does not save
+        on its own -- the caller batches a save after a sweep."""
+        key = normalize_mac(mac)
+        if not key:
+            return False
+        now = self._clock()
+        rec = self._data.setdefault(key, {"label": "", "first_seen": None,
+                                          "last_seen": None})
+        is_new = rec.get("first_seen") is None
+        if is_new:
+            rec["first_seen"] = now
+        rec["last_seen"] = now
+        return is_new
+
+
+if __name__ == "__main__":
+    import tempfile
+    p = os.path.join(tempfile.mkdtemp(), "devices.json")
+    db = DeviceDB(p)
+    print("first mark_seen is new:", db.mark_seen("AA:BB:CC:DD:EE:FF"))
+    print("second mark_seen is not:", db.mark_seen("aa:bb:cc:dd:ee:ff"))
+    db.set_label("aa:bb:cc:dd:ee:ff", "Test TV")
+    db2 = DeviceDB(p)
+    print("label persisted:", db2.label("AA:BB:CC:DD:EE:FF"))
+    print("known after reload:", db2.is_known("aa:bb:cc:dd:ee:ff"))

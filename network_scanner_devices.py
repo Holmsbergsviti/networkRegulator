@@ -16,9 +16,10 @@ import subprocess
 import sys
 import threading
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk, messagebox, simpledialog
 
 import netreg_ui as ui
+import netreg_devicedb
 from netreg_backend import get_backend
 
 REFRESH_MS = 1000
@@ -40,7 +41,18 @@ class DevicesUI(tk.Toplevel):
         self.backend = get_backend()
         self.caps = self.backend.capabilities()
         self.columns = self.backend.device_columns()
+        # "Label" is a synthetic UI column shown first; the rest come from the
+        # backend. Keep the backend column list separate so row dicts built from
+        # it still map correctly.
+        self.display_columns = ("Label",) + tuple(self.columns)
         self.target = {"ESSID": essid, "BSSID": bssid, "CH": ch}
+
+        # Persistent per-device memory: custom labels + which MACs we've seen
+        # before (so a brand-new device can be flagged when it joins).
+        self.db = netreg_devicedb.DeviceDB()
+        self._db_was_empty = (len(self.db) == 0)
+        self._first_sweep = True
+        self._new_macs = set()   # MACs flagged NEW this session (stay highlighted)
 
         self.title(f"Devices on {essid or '(network)'} ({self.backend.name})")
         self.geometry("1040x640")
@@ -70,6 +82,9 @@ class DevicesUI(tk.Toplevel):
         self.cut_btn = ttk.Button(actions, text="Cut off internet",
                                   style="Danger.TButton", command=self.cut_selected)
         self.cut_btn.pack(side="left", padx=(8, 0))
+        self.label_btn = ttk.Button(actions, text="Label device…",
+                                    command=self.label_selected)
+        self.label_btn.pack(side="left", padx=(8, 0))
         self.disc_btn = ttk.Button(actions, text="Disconnect Selected", style="Danger.TButton",
                                    command=self.disconnect_selected)
         self.disc_btn.pack(side="left", padx=(8, 0))
@@ -93,27 +108,35 @@ class DevicesUI(tk.Toplevel):
         # --- table ---------------------------------------------------------
         body = ttk.Frame(self)
         body.pack(fill="both", expand=True, padx=18, pady=(0, 6))
-        self.tree = ttk.Treeview(body, columns=self.columns, show="headings", height=18)
+        self.tree = ttk.Treeview(body, columns=self.display_columns,
+                                 show="headings", height=18)
         vsb = ttk.Scrollbar(body, orient="vertical", command=self.tree.yview)
         self.tree.configure(yscrollcommand=vsb.set)
         vsb.pack(side="right", fill="y")
         self.tree.pack(side="left", fill="both", expand=True)
-        for col in self.columns:
+        for col in self.display_columns:
             self.tree.heading(col, text=col)
-            if col in ("IP", "Hostname", "Vendor"):
-                self.tree.column(col, width=220, anchor="w", minwidth=120)
+            if col == "Label":
+                self.tree.column(col, width=150, anchor="w", minwidth=90)
+            elif col in ("IP", "Hostname", "Vendor"):
+                self.tree.column(col, width=200, anchor="w", minwidth=120)
             elif col in ("MAC", "Station MAC"):
-                self.tree.column(col, width=180, anchor="w", minwidth=140)
+                self.tree.column(col, width=170, anchor="w", minwidth=140)
             elif col in _CENTER:
                 self.tree.column(col, width=90, anchor="center")
             else:
-                self.tree.column(col, width=160, anchor="w")
+                self.tree.column(col, width=150, anchor="w")
         ui.style_tree(self.tree)
+        # A newly-joined (never-seen-before) device is highlighted until the
+        # window is closed.
+        self.tree.tag_configure("new", background="#6b5d1f", foreground="white")
         self.tree.bind("<Double-1>", self.on_double_click)
         self._show_empty("Press Start Scan to look for devices on this network.")
 
         # --- footer hint ---------------------------------------------------
-        foot = "Double-click a device for its details and open ports."
+        foot = ("Double-click a device for its details and open ports.   "
+                "“Label device…” names a device (remembered across runs); a "
+                "device joining for the first time is highlighted.")
         try:
             import netreg_mitm as _m
             if _m.available() and ("IP" in self.columns):
@@ -136,7 +159,7 @@ class DevicesUI(tk.Toplevel):
         if self.tree.get_children():
             return
         self._empty_iid = self.tree.insert("", "end",
-                                           values=(text,) + ("",) * (len(self.columns) - 1))
+                                           values=(text,) + ("",) * (len(self.display_columns) - 1))
 
     def _clear_empty(self):
         if self._empty_iid and self.tree.exists(self._empty_iid):
@@ -181,16 +204,30 @@ class DevicesUI(tk.Toplevel):
 
     def _merge_rows(self, rows):
         """Update rows in place, keyed by MAC (or IP), so the selected device
-        stays selected across scan ticks instead of flickering."""
+        stays selected across scan ticks instead of flickering. Also prepends
+        the custom label and flags brand-new devices."""
         self._clear_empty()
         seen = set()
+        joined = []  # MACs newly joined this sweep (for the alert)
         for r in rows:
             key = self._row_key(r)
             if not key:
                 continue
             iid = "dev:" + key
             seen.add(iid)
-            values = tuple(r.get(c, "") for c in self.columns)
+            mac = r.get("MAC") or r.get("Station MAC") or ""
+            # New-device detection (persistent across runs). Suppress the alert
+            # on the first sweep of a brand-new database (that's the baseline);
+            # after that, anything not seen before is a real new joiner.
+            was_known = self.db.is_known(mac) if mac else True
+            if mac:
+                self.db.mark_seen(mac)
+            if mac and not was_known and not (self._db_was_empty and self._first_sweep):
+                if mac not in self._new_macs:
+                    self._new_macs.add(mac)
+                    joined.append(mac)
+            label = self.db.label(mac) if mac else ""
+            values = (label,) + tuple(r.get(c, "") for c in self.columns)
             if self.tree.exists(iid):
                 if self.tree.item(iid, "values") != values:
                     self.tree.item(iid, values=values)
@@ -200,15 +237,32 @@ class DevicesUI(tk.Toplevel):
         for iid in self.tree.get_children():
             if iid not in seen and iid not in keep_sel and iid != self._empty_iid:
                 self.tree.delete(iid)
-        ui.restripe(self.tree)
+        self._restripe()
+        self._first_sweep = False
+        self.db.save()  # persist the baseline / newly-seen devices
+        if joined:
+            names = ", ".join(self.db.label(m) or m for m in joined)
+            self.set_status(f"⚠ {len(joined)} new device(s) joined: {names}", "warn")
         if not self.tree.get_children():
             self._show_empty("No devices yet — still sweeping the network…")
+
+    def _restripe(self):
+        """Zebra-stripe rows and keep newly-joined devices highlighted. The
+        'new' tag is applied last so its colour wins over the stripe."""
+        for i, iid in enumerate(self.tree.get_children()):
+            if iid == self._empty_iid:
+                continue
+            tags = ["even" if i % 2 else "odd"]
+            mac = iid[4:] if iid.startswith("dev:") else ""
+            if mac and mac in self._new_macs:
+                tags.append("new")
+            self.tree.item(iid, tags=tuple(tags))
 
     def on_double_click(self, _event=None):
         sel = self.tree.selection()
         if not sel or sel[0] == self._empty_iid:
             return
-        row = dict(zip(self.columns, self.tree.item(sel[0], "values")))
+        row = dict(zip(self.display_columns, self.tree.item(sel[0], "values")))
         ip = row.get("IP", "")
         mac = row.get("MAC") or row.get("Station MAC") or ""
         hostname = row.get("Hostname", "")
@@ -238,8 +292,39 @@ class DevicesUI(tk.Toplevel):
         if not sel or sel[0] == self._empty_iid:
             return None
         vals = self.tree.item(sel[0], "values")
-        row = dict(zip(self.columns, vals))
+        row = dict(zip(self.display_columns, vals))
         return row.get("Station MAC") or row.get("MAC")
+
+    def label_selected(self):
+        """Give the selected device a custom name, remembered across runs."""
+        sel = self.tree.selection()
+        if not sel or sel[0] == self._empty_iid:
+            messagebox.showinfo("Pick a device",
+                                "Select a device first to give it a label.")
+            return
+        row = dict(zip(self.display_columns, self.tree.item(sel[0], "values")))
+        mac = row.get("MAC") or row.get("Station MAC") or ""
+        if not netreg_devicedb.normalize_mac(mac):
+            messagebox.showinfo(
+                "No MAC",
+                "This device has no MAC address to remember a label by.")
+            return
+        who = row.get("Hostname") or row.get("IP") or mac
+        current = self.db.label(mac)
+        new = simpledialog.askstring(
+            "Label device",
+            f"Name for {who}\n({mac}):",
+            initialvalue=current, parent=self)
+        if new is None:
+            return  # cancelled
+        self.db.set_label(mac, new)
+        # reflect it immediately in the row
+        iid = "dev:" + (row.get("MAC") or row.get("Station MAC") or row.get("IP") or "")
+        if self.tree.exists(iid):
+            vals = list(self.tree.item(iid, "values"))
+            vals[0] = self.db.label(mac)
+            self.tree.item(iid, values=vals)
+        self.set_status(f"Labelled {mac} as “{self.db.label(mac) or '(cleared)'}”.", "ok")
 
     def route_selected(self):
         """Route the selected device's traffic through this Mac (and keep
@@ -264,7 +349,7 @@ class DevicesUI(tk.Toplevel):
             messagebox.showinfo("Pick a device",
                                 f"Select a device first to {what}.")
             return
-        row = dict(zip(self.columns, self.tree.item(sel[0], "values")))
+        row = dict(zip(self.display_columns, self.tree.item(sel[0], "values")))
         ip = row.get("IP", "")
         if not ip:
             messagebox.showinfo("No IP", "This device has no IP to target.")
