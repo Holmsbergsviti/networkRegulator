@@ -50,6 +50,9 @@ class WifiNetworksUI(tk.Tk):
         self.stop_btn = ttk.Button(btns, text="Stop", command=self.stop_scan,
                                    state="disabled")
         self.stop_btn.pack(side="left", padx=(8, 0))
+        self.channels_btn = ttk.Button(btns, text="Channel analyzer",
+                                       command=self.open_channel_analyzer)
+        self.channels_btn.pack(side="left", padx=(8, 0))
         self.recover_btn = ttk.Button(btns, text="Restore Wi-Fi", command=self.run_recovery)
         self.recover_btn.pack(side="left", padx=(8, 0))
 
@@ -217,6 +220,30 @@ class WifiNetworksUI(tk.Tk):
                     "Couldn't open devices",
                     f"Opening the device list for {essid or 'this network'} "
                     f"failed:\n\n{e}")
+
+    def _current_networks(self):
+        """The networks currently in the table, as dicts the channel analyzer
+        can read. Reads straight from the table so it reflects the live scan."""
+        cols = list(NETWORK_COLUMNS)
+        out = []
+        for iid in self.tree.get_children():
+            if iid == self._empty_iid:
+                continue
+            vals = self.tree.item(iid, "values")
+            out.append(dict(zip(cols, vals)))
+        return out
+
+    def open_channel_analyzer(self):
+        self.set_status("Opening channel analyzer…", "work")
+        try:
+            import channel_window
+            channel_window.open_channels(self, self._current_networks)
+        except Exception as e:
+            try:
+                subprocess.Popen([sys.executable, "channel_window.py"])
+            except Exception:
+                messagebox.showerror("Couldn't open channel analyzer",
+                                     f"Opening the channel analyzer failed:\n\n{e}")
 
     def run_recovery(self):
         if self.scanning:
