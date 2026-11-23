@@ -397,7 +397,7 @@ def default_pcap_path() -> str:
     """Where tcpdump writes the capture so the GUI can analyze it."""
     mac_logs = os.path.join(os.path.expanduser("~"), "Library", "Logs")
     if sys.platform == "darwin" and os.path.isdir(mac_logs):
-        return os.path.join(mac_logs, "NetworkRegulator-print.pcap")
+        return os.path.join(mac_logs, "LanLens-print.pcap")
     return os.path.join(tempfile.gettempdir(), "netreg_print.pcap")
 
 
@@ -516,7 +516,7 @@ class PrintCaptureSession:
         # the macOS admin path backgrounds tcpdump under a different pid.
         if shutil.which("pkill"):
             try:
-                subprocess.run(["pkill", "-INT", "-f", "tcpdump.*NetworkRegulator-print"],
+                subprocess.run(["pkill", "-INT", "-f", "tcpdump.*LanLens-print"],
                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             except Exception:
                 pass

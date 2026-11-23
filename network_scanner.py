@@ -31,7 +31,7 @@ class WifiNetworksUI(tk.Tk):
             pass
         self.caps = self.backend.capabilities()
 
-        self.title(f"NetworkRegulator — Wi-Fi Networks ({self.backend.name})")
+        self.title(f"LanLens — Wi-Fi Networks ({self.backend.name})")
         self.geometry("1120x680")
         self.minsize(900, 520)
         self.scanning = False

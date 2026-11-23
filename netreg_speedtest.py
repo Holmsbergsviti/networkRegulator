@@ -98,7 +98,7 @@ def measure_latency(host: str = "1.1.1.1", port: int = 443, attempts: int = 5,
 
 def _http_get_bytes(url: str, timeout: float) -> int:
     from urllib.request import urlopen, Request
-    req = Request(url, headers={"User-Agent": "NetworkRegulator-speedtest"})
+    req = Request(url, headers={"User-Agent": "LanLens-speedtest"})
     total = 0
     with urlopen(req, timeout=timeout) as resp:
         while True:
@@ -121,7 +121,7 @@ def _http_post_bytes(url: str, nbytes: int, timeout: float) -> int:
     from urllib.request import urlopen, Request
     body = b"\x00" * nbytes
     req = Request(url, data=body, method="POST",
-                  headers={"User-Agent": "NetworkRegulator-speedtest",
+                  headers={"User-Agent": "LanLens-speedtest",
                            "Content-Type": "application/octet-stream"})
     with urlopen(req, timeout=timeout) as resp:
         resp.read()

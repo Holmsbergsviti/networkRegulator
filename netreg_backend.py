@@ -1,5 +1,5 @@
 """
-netreg_backend.py -- cross-platform backend for NetworkRegulator.
+netreg_backend.py -- cross-platform backend for LanLens.
 
 All OS-specific Wi-Fi logic lives behind a small interface so the GUI never
 has to know which platform it runs on. Call get_backend() to get the right

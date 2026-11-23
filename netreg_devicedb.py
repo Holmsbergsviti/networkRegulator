@@ -21,19 +21,29 @@ import sys
 import time
 
 
-def default_path() -> str:
-    """Per-user JSON file path, following each OS's convention."""
+def _config_base(app_name: str) -> str:
+    """Per-OS config directory for the given app folder name."""
     if sys.platform == "darwin":
-        base = os.path.join(os.path.expanduser("~"), "Library",
-                            "Application Support", "NetworkRegulator")
+        return os.path.join(os.path.expanduser("~"), "Library",
+                            "Application Support", app_name)
     elif os.name == "nt":
-        base = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")),
-                            "NetworkRegulator")
+        return os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")),
+                            app_name)
     else:
-        base = os.path.join(os.environ.get("XDG_CONFIG_HOME",
+        return os.path.join(os.environ.get("XDG_CONFIG_HOME",
                             os.path.join(os.path.expanduser("~"), ".config")),
-                            "networkregulator")
-    return os.path.join(base, "devices.json")
+                            app_name.lower())
+
+
+def default_path() -> str:
+    """Per-user JSON file path for the devices store (app folder: LanLens)."""
+    return os.path.join(_config_base("LanLens"), "devices.json")
+
+
+def _legacy_path() -> str:
+    """Old devices-store path from when the app was named NetworkRegulator.
+    Used once to migrate saved labels into the new LanLens location."""
+    return os.path.join(_config_base("NetworkRegulator"), "devices.json")
 
 
 def normalize_mac(mac: str) -> str:
@@ -52,8 +62,17 @@ class DeviceDB:
     # ---- persistence ------------------------------------------------------
     def load(self):
         self._data = {}
+        read_path = self.path
+        # One-time migration: if the new (LanLens) file doesn't exist yet but an
+        # old NetworkRegulator file does, read labels from the old one. We only
+        # read it here; the next save() writes to the new path, so the old file
+        # is left untouched as a backup.
+        if (self.path == default_path()
+                and not os.path.exists(self.path)
+                and os.path.exists(_legacy_path())):
+            read_path = _legacy_path()
         try:
-            with open(self.path, "r", encoding="utf-8") as f:
+            with open(read_path, "r", encoding="utf-8") as f:
                 raw = json.load(f)
             if isinstance(raw, dict):
                 # keep only well-formed entries

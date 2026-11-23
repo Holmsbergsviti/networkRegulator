@@ -1,4 +1,4 @@
-# NetworkRegulator
+# LanLens
 
 A GUI for scanning and managing **your own** Wi-Fi network — no terminal
 commands required. It wraps existing open-source tooling behind one interface
@@ -46,18 +46,42 @@ python3 netreg_backend.py
 - On recent macOS (14+), Wi-Fi **names** are hidden (`<redacted>`) from
   unprivileged tools — the network you're on is still labelled `(connected)`.
 
-#### Seeing real Wi-Fi names (optional, macOS 14+)
-To unlock real SSIDs you must run the app as a bundle that holds Location
-Services permission (a plain script can't). No paid Apple account needed:
+#### Build the double-click app (free, no Apple account)
+macOS only shows the **Location** prompt (which unlocks real Wi-Fi names) and
+the **Local Network** prompt (which fills the device list) to an app *bundle*
+carrying the right `Info.plist` — a plain script can't get them. You can build
+that bundle for free: no paid Apple Developer account, no notarization, just
+ad-hoc signing. Run this **on your Mac**, in `~/dev/networkRegulator`:
 
 ```bash
-./build_macapp.sh         # packages + ad-hoc-signs dist/NetworkRegulator.app
-open dist/NetworkRegulator.app
+./build_macapp.sh         # packages + ad-hoc-signs dist/LanLens.app
 ```
 
-Allow **Location** when macOS prompts on first launch. The app then reads
-names via Apple's CoreWLAN API. Requires `pyobjc` (the build script installs
-`pyobjc-framework-CoreWLAN` and `pyobjc-framework-CoreLocation` for you).
+**First launch — get past Gatekeeper (one time):** because the app is ad-hoc
+signed (not signed with a paid Developer ID), the very first double-click shows
+*"LanLens can't be opened because it is from an unidentified developer."* That's
+expected. To open it the first time:
+
+> **right-click (or Control-click) `dist/LanLens.app` → Open → Open**
+
+After that one time, a normal double-click works forever.
+
+On first launch, **allow Location** (reveals Wi-Fi names, read via Apple's
+CoreWLAN API) and **allow Local Network** (lists devices) when macOS asks. The
+build script installs the `pyobjc` frameworks it needs
+(`pyobjc-framework-CoreWLAN`, `pyobjc-framework-CoreLocation`) for you.
+
+*Self-contained alternative:* `python3 -m pip install --user py2app && python3
+setup.py py2app` builds a standalone `dist/LanLens.app` that bundles its own
+Python (runs on a Mac with no dev tools). Same free ad-hoc signing, same
+one-time Gatekeeper step.
+
+> **What the free path does and doesn't do:** ad-hoc signing + the usage-string
+> `Info.plist` is enough for the Location/Local-Network prompts to appear and
+> for real Wi-Fi names to show on **your own Mac**. Notarization (which needs a
+> paid account) is only required to *distribute* the app to other Macs without
+> the Gatekeeper warning — it is **not** needed for the permissions to work
+> locally.
 - **Disconnecting** a device needs packet injection, which the **built-in Mac
   card cannot do**. To enable it:
   1. `brew install aircrack-ng`

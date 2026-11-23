@@ -3,7 +3,7 @@ netreg_integrations.py -- optional, net-new library integrations.
 
 Each capability here wraps an open-source library or tool that is *not* part of
 the core stack (sockets / nmap / scapy / aircrack-ng). Everything is behind
-availability detection, so NetworkRegulator runs with none of these installed
+availability detection, so LanLens runs with none of these installed
 and simply gets richer as each one is added. Nothing here ever raises on a
 missing dependency -- callers get an empty / fallback result instead.
 

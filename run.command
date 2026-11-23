@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# run.command -- double-click this in Finder to launch NetworkRegulator.
+# run.command -- double-click this in Finder to launch LanLens.
 #
 # macOS runs a .command file in Terminal when you double-click it, so you don't
 # have to type anything. (First time only: if macOS blocks it as being from an
@@ -96,5 +96,5 @@ fi
 # --------------------------------------------------------------------------- #
 warn "Heads-up: disconnecting devices over Wi-Fi (deauth) also needs a monitor-mode USB adapter — the built-in Mac card physically can't inject packets. Scanning, the device list, vendor names, and routing traffic through this Mac (bettercap) all work without one."
 
-good "Launching NetworkRegulator…"
+good "Launching LanLens…"
 exec "$PYBIN" network_scanner.py
