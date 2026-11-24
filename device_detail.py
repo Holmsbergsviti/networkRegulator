@@ -175,6 +175,9 @@ class DeviceDetailUI(tk.Toplevel):
         self.hostname = hostname or ""
         self.scanning = False
         self._web_info = None
+        # Background scans/probes keep running after the window is closed; this
+        # flag lets their results be dropped instead of crashing on gone widgets.
+        self._alive = True
 
         self.title(f"Device {self.ip or '(unknown)'}")
         self.geometry("580x600")
@@ -279,15 +282,15 @@ class DeviceDetailUI(tk.Toplevel):
             # leaving "Web interface: checking…" stuck for seconds.)
             threading.Thread(target=self._prime, daemon=True).start()
             threading.Thread(target=self._probe_web, daemon=True).start()
-            self.after(300, self.start_scan)
+            self._post(self.start_scan, delay=300)
 
     def _prime(self):
         if not self.hostname:
             name = resolve_hostname(self.ip)
-            self.after(0, self.vars["Hostname"].set, name or "(no reverse DNS)")
-            self.after(0, self._refresh_type)  # hostname can sharpen the guess
+            self._post(self.vars["Hostname"].set, name or "(no reverse DNS)")
+            self._post(self._refresh_type)  # hostname can sharpen the guess
         ok, latency = ping_host(self.ip)
-        self.after(0, self.vars["Reachable"].set,
+        self._post(self.vars["Reachable"].set,
                    (f"yes ({latency})" if ok else "no reply to ping"))
 
     def _refresh_type(self):
@@ -316,7 +319,7 @@ class DeviceDetailUI(tk.Toplevel):
         risk = probe.web_risk(info)
         if risk:
             text += "  ⚠ no login"
-        self.after(0, self._apply_web_result, text, risk)
+        self._post(self._apply_web_result, text, risk)
 
     def _apply_web_result(self, text, risk):
         self.vars["Web interface"].set(text)
@@ -340,7 +343,7 @@ class DeviceDetailUI(tk.Toplevel):
 
         def on_open(port):
             found["n"] += 1
-            self.after(0, self._add_port, port)
+            self._post(self._add_port, port)
 
         try:
             fast = None
@@ -365,7 +368,7 @@ class DeviceDetailUI(tk.Toplevel):
                               "services you can connect to.", "idle")
         except Exception as e:
             msg, state = f"Scan error: {e}", "error"
-        self.after(0, self._scan_done, msg, state)
+        self._post(self._scan_done, msg, state)
 
     def _add_port(self, port):
         try:
@@ -442,7 +445,7 @@ class DeviceDetailUI(tk.Toplevel):
         if not text and port in probe.HTTPS_PORTS:
             text = "TLS (encrypted)"
         if text:
-            self.after(0, self._set_version, iid, text)
+            self._post(self._set_version, iid, text)
 
     def _set_version(self, iid, text):
         if self.tree.exists(iid):
@@ -502,7 +505,25 @@ class DeviceDetailUI(tk.Toplevel):
             self._empty_iid = self.tree.insert(
                 "", "end", values=("—", "No open ports found", "", ""))
 
+    def _post(self, func, *args, delay=0):
+        """Schedule a UI update that may originate from a worker thread, but
+        drop it if the window has since been closed (a background port scan or
+        probe can finish after close, which otherwise crashes on a gone
+        widget)."""
+        def run():
+            if not self._alive:
+                return
+            try:
+                func(*args)
+            except tk.TclError:
+                pass
+        try:
+            self.after(delay, run)
+        except Exception:
+            pass
+
     def _on_close(self):
+        self._alive = False
         self.destroy()
 
 
