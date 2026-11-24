@@ -33,6 +33,7 @@ Printing protocols we look at:
 """
 from __future__ import annotations
 
+import ipaddress
 import os
 import re
 import shutil
@@ -406,6 +407,10 @@ def build_filter(printer_ip: str) -> str:
     printer_ip = (printer_ip or "").strip()
     if not printer_ip:
         raise ValueError("a printer IP is required")
+    try:
+        ipaddress.ip_address(printer_ip)
+    except ValueError:
+        raise ValueError(f"not a valid IP address: {printer_ip!r}")
     ports = " or ".join(f"tcp port {p}" for p in _CAPTURE_PORTS)
     return f"host {printer_ip} and ({ports})"
 
@@ -430,11 +435,20 @@ def _sh_quote(s: str) -> str:
     return "'" + s.replace("'", "'\\''") + "'"
 
 
+def _osa_escape(s: str) -> str:
+    """Escape for an AppleScript double-quoted literal. osascript runs
+    `do shell script "<this>"`, so a bare " or \\ in the command would
+    break out of the literal; escape both. Applied on top of the shell
+    quoting (_sh_quote), which is a separate layer."""
+    return s.replace("\\", "\\\\").replace('"', '\\"')
+
+
 def _mac_admin_command(argv: list[str]) -> list[str]:
     """Wrap argv so macOS shows one GUI password prompt (osascript) and runs
     tcpdump in the background; stop() kills it by name."""
     quoted = " ".join(_sh_quote(a) for a in argv)
-    script = (f'do shell script "{quoted} &> /dev/null &" '
+    inner = f"{quoted} &> /dev/null &"
+    script = (f'do shell script "{_osa_escape(inner)}" '
               f'with administrator privileges')
     return ["osascript", "-e", script]
 
@@ -470,7 +484,10 @@ class PrintCaptureSession:
             return False, "No printer IP to capture."
         self.pcap_path = default_pcap_path()
         try:
-            open(self.pcap_path, "w").close()  # start empty
+            # 0600: the capture can hold plaintext print-job content.
+            fd = os.open(self.pcap_path,
+                         os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            os.close(fd)
         except Exception:
             pass
         try:
@@ -513,17 +530,38 @@ class PrintCaptureSession:
                 proc.terminate()
             except Exception:
                 pass
-        # the macOS admin path backgrounds tcpdump under a different pid.
-        if shutil.which("pkill"):
+        # tcpdump runs under a different pid, and on macOS as root (osascript
+        # "with administrator privileges"), so an unprivileged pkill can't
+        # signal it. Kill it the way we started it.
+        if sys.platform == "darwin":
             try:
-                subprocess.run(["pkill", "-INT", "-f", "tcpdump.*LanLens-print"],
+                subprocess.run(
+                    ["osascript", "-e",
+                     'do shell script "pkill -INT -f \\"tcpdump.*LanLens-print\\"" '
+                     'with administrator privileges'],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            except Exception:
+                pass
+        elif shutil.which("pkill"):
+            try:
+                subprocess.run(["sudo", "-n", "pkill", "-INT", "-f",
+                                "tcpdump.*LanLens-print"],
                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             except Exception:
                 pass
+        # The pcap can hold plaintext print-job content; don't leave it.
+        if self.pcap_path:
+            try:
+                if os.path.exists(self.pcap_path):
+                    os.remove(self.pcap_path)
+            except OSError:
+                pass
+        self.pcap_path = None
         printer, self._printer = self._printer, ""
         if not printer:
             return True, "Nothing was running."
-        return True, f"Stopped capturing traffic to {printer}."
+        return True, (f"Stopped capturing traffic to {printer}. The capture "
+                      f"file has been deleted.")
 
 
 if __name__ == "__main__":

@@ -19,6 +19,7 @@ exercised on the target machine, not in CI.
 """
 from __future__ import annotations
 
+import ipaddress
 import os
 import shutil
 import signal
@@ -94,6 +95,10 @@ def build_eval(target_ip: str, full_duplex: bool = True,
     target_ip = (target_ip or "").strip()
     if not target_ip:
         raise ValueError("a target IP is required (refusing to spoof the whole network)")
+    try:
+        ipaddress.ip_address(target_ip)
+    except ValueError:
+        raise ValueError(f"not a valid IP address: {target_ip!r}")
     cmds = [
         f"set arp.spoof.targets {target_ip}",
         f"set arp.spoof.fullduplex {'true' if full_duplex else 'false'}",
@@ -128,6 +133,14 @@ def _sh_quote(s: str) -> str:
     return "'" + s.replace("'", "'\\''") + "'"
 
 
+def _osa_escape(s: str) -> str:
+    """Escape for an AppleScript double-quoted literal. osascript runs
+    `do shell script "<this>"`, so a bare " or \\ in the command would
+    break out of the literal; escape both. Applied on top of the shell
+    quoting (_sh_quote), which is a separate layer."""
+    return s.replace("\\", "\\\\").replace('"', '\\"')
+
+
 def _mac_admin_command(argv: list[str], log_path: str | None = None) -> list[str]:
     """Wrap argv so macOS shows a GUI password prompt (osascript). The spoof
     runs in the background; `stop()` kills it by name. When `log_path` is given,
@@ -135,7 +148,8 @@ def _mac_admin_command(argv: list[str], log_path: str | None = None) -> list[str
     summary; otherwise it's discarded."""
     quoted = " ".join(_sh_quote(a) for a in argv)
     redirect = f"&> {_sh_quote(log_path)}" if log_path else "&> /dev/null"
-    script = (f'do shell script "{quoted} {redirect} &" '
+    inner = f"{quoted} {redirect} &"
+    script = (f'do shell script "{_osa_escape(inner)}" '
               f'with administrator privileges')
     return ["osascript", "-e", script]
 
@@ -236,14 +250,30 @@ class RouteSession:
                 proc.terminate()
             except Exception:
                 pass
-        # the macOS admin path backgrounds bettercap under a different pid, so
-        # also ask it to quit by name; bettercap heals ARP on shutdown.
+        # bettercap runs under a different pid than the handle we hold, and on
+        # macOS it runs as root (osascript "with administrator privileges"),
+        # so an unprivileged pkill can't signal it. Kill it the same way we
+        # started it: on macOS via a privileged osascript, elsewhere via sudo.
+        # Only claim success when the kill actually reports success, so the
+        # device is never told it's safe while a spoof is still live.
         killed = False
-        if shutil.which("pkill"):
+        if sys.platform == "darwin":
             try:
-                subprocess.run(["pkill", "-INT", "-x", "bettercap"],
-                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                killed = True
+                r = subprocess.run(
+                    ["osascript", "-e",
+                     'do shell script "pkill -INT -x bettercap" '
+                     'with administrator privileges'],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                # pkill exits 0 if it signalled a process, 1 if none matched
+                # (already gone); both mean bettercap is no longer running.
+                killed = r.returncode in (0, 1)
+            except Exception:
+                killed = False
+        elif shutil.which("pkill"):
+            try:
+                r = subprocess.run(["sudo", "-n", "pkill", "-INT", "-x", "bettercap"],
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                killed = r.returncode in (0, 1)
             except Exception:
                 killed = False
         if not self._target:
@@ -251,10 +281,12 @@ class RouteSession:
         target, self._target = self._target, ""
         was_ban, self._ban = self._ban, False
         verb = "cutting off" if was_ban else "routing"
-        return True, (f"Stopped {verb} {target}. bettercap restored the ARP "
-                      f"tables; the device's connection is back to normal."
-                      + ("" if killed else " (If it's still affected, quit "
-                         "bettercap manually.)"))
+        if killed:
+            return True, (f"Stopped {verb} {target}. bettercap restored the ARP "
+                          f"tables; the device's connection is back to normal.")
+        return False, (f"Tried to stop {verb} {target}, but could NOT confirm "
+                       f"bettercap stopped — the device may still be affected. "
+                       f"Stop it manually: sudo pkill -INT bettercap")
 
 
 if __name__ == "__main__":

@@ -21,8 +21,24 @@ good()  { printf "\033[1;32m%s\033[0m\n" "$*"; }   # green
 # 1) Self-update (best effort; never blocks launch)
 # --------------------------------------------------------------------------- #
 if [ -d .git ] && command -v git >/dev/null 2>&1; then
-  info "Checking for updates…"
-  git pull --ff-only 2>&1 || echo "(couldn't update — launching the current version)"
+  if [ "${LANLENS_NO_UPDATE:-0}" = "1" ]; then
+    info "Skipping update check (LANLENS_NO_UPDATE=1)."
+  else
+    info "Checking for updates…"
+    git fetch --quiet 2>/dev/null || true
+    LOCAL="$(git rev-parse @ 2>/dev/null)"
+    REMOTE="$(git rev-parse @{u} 2>/dev/null)"
+    if [ -n "$REMOTE" ] && [ "$LOCAL" != "$REMOTE" ]; then
+      warn "An update is available. New commits to be applied:"
+      git --no-pager log --oneline "$LOCAL..$REMOTE" 2>/dev/null | sed 's/^/    /'
+      warn "(This runs after updating. Set LANLENS_NO_UPDATE=1 to skip auto-update.)"
+      git merge --ff-only "@{u}" >/dev/null 2>&1 \
+        && good "Updated." \
+        || echo "(couldn't fast-forward — launching the current version)"
+    else
+      good "Already up to date."
+    fi
+  fi
 fi
 
 # Prefer a python3 whose Tk is >= 8.6.13 (older Tk paints a blank window on

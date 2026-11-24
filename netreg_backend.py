@@ -34,6 +34,15 @@ from concurrent.futures import ThreadPoolExecutor
 
 from netreg_seen import SeenTracker
 
+# A MAC/BSSID is six hex pairs separated by ':' or '-'. Validate before
+# any value reaches a command line, so a stray token can't be read as a
+# flag (argument injection) by aireplay-ng et al.
+_MAC_RE = re.compile(r"^[0-9A-Fa-f]{2}([:-][0-9A-Fa-f]{2}){5}$")
+
+
+def _valid_mac(s: str) -> bool:
+    return bool(_MAC_RE.match((s or "").strip()))
+
 # Optional net-new library integrations (vendor lookup, mDNS names, fast scan).
 # Best-effort import so the backend still works if the module/libs are absent;
 # every helper degrades to "" / no-op in that case.
@@ -776,16 +785,22 @@ class MacBackend(Backend):
         if not mon:
             return False, ("Set NETREG_MON_IFACE to your monitor-mode adapter "
                            "(e.g. en1) before disconnecting.")
+        if not _valid_mac(bssid):
+            return False, f"Refusing to deauth: {bssid!r} is not a valid BSSID."
+        if station and not _valid_mac(station):
+            return False, f"Refusing to deauth: {station!r} is not a valid station MAC."
         count = "10" if station else "0"
         cmd = ["sudo", "aireplay-ng", "-0", count, "-a", bssid]
         if station:
             cmd += ["-c", station]
         cmd += [mon]
         try:
-            subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            return True, "Sent deauth: " + " ".join(cmd)
+            r = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         except Exception as e:
             return False, f"Deauth failed: {e}"
+        if r.returncode != 0:
+            return False, f"Deauth command exited with status {r.returncode}."
+        return True, f"Sent deauth to {station or bssid}."
 
     def recover(self) -> tuple[bool, str]:
         iface = self._default_iface()
@@ -904,16 +919,22 @@ class LinuxBackend(Backend):
         self._dev_proc = None
 
     def deauth(self, bssid: str, station: str | None = None) -> tuple[bool, str]:
+        if not _valid_mac(bssid):
+            return False, f"Refusing to deauth: {bssid!r} is not a valid BSSID."
+        if station and not _valid_mac(station):
+            return False, f"Refusing to deauth: {station!r} is not a valid station MAC."
         count = "10" if station else "1"
         cmd = ["sudo", "aireplay-ng", "-0", count, "-a", bssid]
         if station:
             cmd += ["-c", station]
         cmd += [self.mon]
         try:
-            subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            return True, "Sent deauth: " + " ".join(cmd)
+            r = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         except Exception as e:
             return False, f"Deauth failed: {e}"
+        if r.returncode != 0:
+            return False, f"Deauth command exited with status {r.returncode}."
+        return True, f"Sent deauth to {station or bssid}."
 
     def recover(self) -> tuple[bool, str]:
         try:
@@ -1198,6 +1219,10 @@ class WindowsBackend(Backend):
         subnet) if PowerShell isn't available or returns something odd."""
         if not ip:
             return 24
+        try:
+            ipaddress.ip_address(ip)
+        except ValueError:
+            return 24  # never interpolate a non-IP into the PowerShell call
         try:
             out = subprocess.run(
                 ["powershell", "-NoProfile", "-Command",

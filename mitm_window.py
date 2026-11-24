@@ -530,6 +530,11 @@ class MitmUI(tk.Toplevel):
                       "Only proceed on a network you own or are authorized to test.")
         if not messagebox.askyesno("Confirm", prompt):
             return
+        try:
+            import netreg_attest
+            netreg_attest.record("cut-off" if self.cut else "route", self.ip)
+        except Exception:
+            pass
         self.busy = True
         self._sync_buttons()
         self.status_var.set("Starting… you may be asked for your password.")
