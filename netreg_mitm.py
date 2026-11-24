@@ -28,8 +28,32 @@ import tempfile
 import threading
 
 
+# Common install locations to check when bettercap isn't on PATH. A macOS app
+# launched from Finder (double-clicking LanLens.app or run.command) inherits a
+# minimal PATH — typically /usr/bin:/bin:/usr/sbin:/sbin — that does NOT include
+# Homebrew's bin dir, so `which bettercap` fails even though `brew install
+# bettercap` succeeded in the user's terminal. Check the usual spots directly.
+_BETTERCAP_DIRS = (
+    "/opt/homebrew/bin",      # Homebrew on Apple Silicon
+    "/usr/local/bin",         # Homebrew on Intel macOS
+    "/opt/local/bin",         # MacPorts
+    "/usr/bin",
+    "/bin",
+)
+
+
 def bettercap_path() -> str:
-    return shutil.which("bettercap") or ""
+    """Absolute path to the bettercap binary, or "" if not found. Tries PATH
+    first, then the common install dirs that a Finder-launched app can't see."""
+    found = shutil.which("bettercap")
+    if found:
+        return found
+    name = "bettercap.exe" if sys.platform.startswith("win") else "bettercap"
+    for d in _BETTERCAP_DIRS:
+        cand = os.path.join(d, name)
+        if os.path.isfile(cand) and os.access(cand, os.X_OK):
+            return cand
+    return ""
 
 
 def default_log_path() -> str:
