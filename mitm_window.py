@@ -185,11 +185,19 @@ class MitmUI(tk.Toplevel):
         # HTTPS content pane (route mode only): the actual requests once the
         # device trusts the cert. Hidden until "Inspect HTTPS content" is on.
         self.https_frame = None
+        self._https_by_iid = {}
+        self._https_detail = {}
         if not self.cut:
             self.https_frame = ttk.LabelFrame(
                 self, text="HTTPS requests (content — needs cert trusted on device)")
+            # Burp-style split: the request list on top, and the selected
+            # request's request/response detail (headers + body) below.
+            split = ttk.Panedwindow(self.https_frame, orient="vertical")
+            split.pack(fill="both", expand=True)
+
+            list_fr = ttk.Frame(split)
             hcols = ("time", "method", "host", "path", "status", "type")
-            self.https_tree = ttk.Treeview(self.https_frame, columns=hcols,
+            self.https_tree = ttk.Treeview(list_fr, columns=hcols,
                                            show="headings", height=6)
             for c, text, w, anchor in (
                 ("time", "Time", 70, "w"), ("method", "Method", 70, "center"),
@@ -198,13 +206,34 @@ class MitmUI(tk.Toplevel):
             ):
                 self.https_tree.heading(c, text=text)
                 self.https_tree.column(c, width=w, anchor=anchor)
-            hvsb = ttk.Scrollbar(self.https_frame, orient="vertical",
+            hvsb = ttk.Scrollbar(list_fr, orient="vertical",
                                  command=self.https_tree.yview)
             self.https_tree.configure(yscrollcommand=hvsb.set)
             hvsb.pack(side="right", fill="y")
             self.https_tree.pack(side="left", fill="both", expand=True)
             ui.style_tree(self.https_tree)
             ui.enable_copy(self.https_tree)
+            self.https_tree.bind("<<TreeviewSelect>>", self._on_https_select)
+            split.add(list_fr, weight=2)
+
+            # Detail: Request / Response tabs, each a selectable monospaced view
+            # of the headers and (textual) body — click a row to populate them.
+            mono = ui.fonts()[4]
+            detail = ttk.Notebook(split)
+            for key, label in (("request", "Request"), ("response", "Response")):
+                tab = ttk.Frame(detail)
+                txt = tk.Text(tab, height=9, wrap="none", font=mono,
+                              bg=ui.SURFACE, fg=ui.INK, insertbackground=ui.INK,
+                              borderwidth=0, highlightthickness=0)
+                dvsb = ttk.Scrollbar(tab, orient="vertical", command=txt.yview)
+                txt.configure(yscrollcommand=dvsb.set)
+                dvsb.pack(side="right", fill="y")
+                txt.pack(side="left", fill="both", expand=True)
+                txt.insert("1.0", "Select a request above to see its headers "
+                           "and content.")
+                self._https_detail[key] = txt
+                detail.add(tab, text=label)
+            split.add(detail, weight=3)
             # packed on demand by _toggle_https so it takes no space when unused
 
         bottom = ttk.Frame(self); bottom.pack(fill="x", padx=12, pady=(0, 8))
@@ -291,20 +320,67 @@ class MitmUI(tk.Toplevel):
             f"Throughput:  ↓ {bw.human_rate(r['down'])}   ↑ {bw.human_rate(r['up'])}"
             f"      total {nt.human_bytes(t['total'])} in {t['packets']} packets")
 
+    @staticmethod
+    def _https_iid(r):
+        """A stable row id for a flow, so live updates keep the selection and
+        the detail panes don't jump while new requests stream in."""
+        return "f%d" % abs(hash((r.get("ts"), r.get("method"), r.get("host"),
+                                 r.get("path"), r.get("status"),
+                                 r.get("resp_bytes"))))
+
     def _render_https(self):
         """Render the most recent HTTPS requests the proxy has decrypted."""
         if self.https_frame is None:
             return
         import time as _t
+        sel = (self.https_tree.selection() or [None])[0]
         self.https_tree.delete(*self.https_tree.get_children())
-        for r in self.https_sum.recent(60):
+        self._https_by_iid = {}
+        for r in self.https_sum.recent(200):   # newest first
+            iid = self._https_iid(r)
+            if iid in self._https_by_iid:
+                continue
+            self._https_by_iid[iid] = r
             ts = r.get("ts") or 0
             tstr = _t.strftime("%H:%M:%S", _t.localtime(ts)) if ts else ""
             path = (r.get("path") or "")[:90]
-            self.https_tree.insert("", "end", values=(
+            self.https_tree.insert("", "end", iid=iid, values=(
                 tstr, r.get("method", ""), r.get("host", ""), path,
                 r.get("status", ""), r.get("content_type", "")))
         ui.restripe(self.https_tree)
+        if sel and self.https_tree.exists(sel):
+            self.https_tree.selection_set(sel)
+
+    def _on_https_select(self, _e=None):
+        sel = self.https_tree.selection()
+        r = self._https_by_iid.get(sel[0]) if sel else None
+        if not r:
+            return
+        scheme = r.get("scheme") or "https"
+        req = "%s %s://%s%s\n\n%s" % (
+            r.get("method", ""), scheme, r.get("host", ""), r.get("path", ""),
+            r.get("req_headers") or "(headers not captured)")
+        if r.get("req_body"):
+            req += "\n\n" + r["req_body"]
+        self._set_https_detail("request", req)
+
+        resp = "HTTP %s   %s\n\n%s" % (
+            r.get("status", ""), r.get("content_type", ""),
+            r.get("resp_headers") or "(headers not captured)")
+        body = r.get("resp_body") or r.get("snippet") or ""
+        if body:
+            resp += "\n\n" + body
+        self._set_https_detail("response", resp)
+
+    def _set_https_detail(self, key, text):
+        w = self._https_detail.get(key)
+        if w is None:
+            return
+        try:
+            w.delete("1.0", "end")
+            w.insert("1.0", text)
+        except Exception:
+            pass
 
     def _show_cert_help(self):
         messagebox.showinfo("Install mitmproxy's certificate",
@@ -327,6 +403,14 @@ class MitmUI(tk.Toplevel):
                                 "for your password.")
             self.https_sum = https.HttpsFlowSummary()
             self._https_pos = 0
+            self._https_by_iid = {}
+            for _w in self._https_detail.values():
+                try:
+                    _w.delete("1.0", "end")
+                    _w.insert("1.0", "Select a request above to see its "
+                              "headers and content.")
+                except Exception:
+                    pass
             if self.https_frame is not None and not self.https_frame.winfo_ismapped():
                 self.https_frame.pack(fill="both", expand=True, padx=12, pady=(4, 4))
 

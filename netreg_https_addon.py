@@ -21,7 +21,9 @@ import json
 import os
 import time
 
-SNIPPET_MAX = 240          # chars of a textual body we keep
+SNIPPET_MAX = 240          # chars of a textual body kept for the one-line list
+BODY_MAX = 4000            # chars of a textual body kept for the detail view
+HEADERS_MAX = 4000         # chars of a header block kept for the detail view
 _TEXTUAL = ("text/", "application/json", "application/xml",
             "application/javascript", "application/x-www-form-urlencoded",
             "application/graphql")
@@ -48,6 +50,29 @@ def _snippet(body: bytes, content_type: str) -> str:
     return text[:SNIPPET_MAX]
 
 
+def _headers(headers) -> str:
+    """Request/response headers as a readable 'Name: value' block, capped."""
+    try:
+        lines = [f"{k}: {v}" for k, v in headers.items()]
+    except Exception:
+        return ""
+    return "\n".join(lines)[:HEADERS_MAX]
+
+
+def _body(body: bytes, content_type: str) -> str:
+    """A longer textual body for the detail view. Binary stays out; instead we
+    note its size so the detail pane can say '(binary, N bytes)'."""
+    if not body:
+        return ""
+    if not _is_textual(content_type):
+        return f"[binary body, {len(body)} bytes — not shown]"
+    try:
+        text = body[:BODY_MAX * 2].decode("utf-8", "replace")
+    except Exception:
+        return ""
+    return text[:BODY_MAX]
+
+
 def _write(record: dict):
     path = _log_path()
     if not path:
@@ -66,6 +91,9 @@ def response(flow):  # mitmproxy calls this when a response is complete
         ct = ""
         if resp and resp.headers:
             ct = resp.headers.get("content-type", "")
+        req_ct = ""
+        if req and req.headers:
+            req_ct = req.headers.get("content-type", "")
         record = {
             "ts": time.time(),
             "client": flow.client_conn.peername[0] if flow.client_conn
@@ -80,6 +108,12 @@ def response(flow):  # mitmproxy calls this when a response is complete
             "resp_bytes": len(resp.raw_content or b"") if resp
                           and resp.raw_content else 0,
             "snippet": _snippet(resp.raw_content if resp else b"", ct),
+            # Burp-style detail: full-ish headers + a longer textual body for
+            # both the request and the response.
+            "req_headers": _headers(req.headers) if req else "",
+            "req_body": _body(req.raw_content if req else b"", req_ct),
+            "resp_headers": _headers(resp.headers) if resp else "",
+            "resp_body": _body(resp.raw_content if resp else b"", ct),
         }
     except Exception as e:
         record = {"ts": time.time(), "error": f"{type(e).__name__}: {e}"}
