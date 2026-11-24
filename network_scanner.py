@@ -13,6 +13,7 @@ from tkinter import ttk, messagebox
 
 import netreg_ui as ui
 from netreg_backend import NETWORK_COLUMNS, get_backend
+import netreg_netsel
 import netreg_restore
 
 REFRESH_MS = 1500
@@ -107,6 +108,7 @@ class WifiNetworksUI(tk.Tk):
         ui.style_tree(self.tree)
         ui.enable_copy(self.tree)
         self.tree.bind("<Double-1>", self.on_double_click)
+        self.tree.bind("<<TreeviewSelect>>", self._on_net_select)
 
         # Empty-state hint shown inside the (otherwise blank) table.
         self._empty_iid = None
@@ -240,6 +242,46 @@ class WifiNetworksUI(tk.Tk):
     def on_double_click(self, _event=None):
         self.open_selected_devices()
 
+    def _connected_suffix(self) -> str:
+        return getattr(self.backend, "CONNECTED_SUFFIX", "") or ""
+
+    def _is_connected_essid(self, essid_value) -> bool:
+        return netreg_netsel.is_connected_row(essid_value, self._connected_suffix())
+
+    def _connected_name(self) -> str:
+        """Plain name of the network this Mac is joined to: from the backend
+        if it knows, else from the suffix-marked row in the table."""
+        try:
+            n = (self.backend.connected_ssid() or "").strip()
+        except Exception:
+            n = ""
+        if n:
+            return n
+        suf = self._connected_suffix()
+        if suf:
+            idx = list(NETWORK_COLUMNS).index("ESSID")
+            for iid in self.tree.get_children():
+                if iid == self._empty_iid:
+                    continue
+                val = self.tree.item(iid, "values")[idx]
+                if netreg_netsel.is_connected_row(val, suf):
+                    return netreg_netsel.strip_suffix(val, suf)
+        return ""
+
+    def _on_net_select(self, _event=None):
+        # When we can tell which network this Mac is joined to, only allow
+        # "View devices" on that row: the device list can only scan the
+        # connected network, so offering it for another SSID is misleading.
+        suf = self._connected_suffix()
+        if not suf:
+            self.view_btn.state(["!disabled"])
+            return
+        sel = self.tree.selection()
+        idx = list(NETWORK_COLUMNS).index("ESSID")
+        ok = bool(sel) and sel[0] != self._empty_iid and self._is_connected_essid(
+            self.tree.item(sel[0], "values")[idx])
+        self.view_btn.state(["!disabled"] if ok else ["disabled"])
+
     def open_selected_devices(self):
         """Open the devices window for the selected network. Shared by the
         "View devices" button and a double-click on the row."""
@@ -254,6 +296,18 @@ class WifiNetworksUI(tk.Tk):
         essid = vals[cols.index("ESSID")]
         bssid = vals[cols.index("BSSID")]
         ch = vals[cols.index("CH")]
+        suf = self._connected_suffix()
+        if suf and not self._is_connected_essid(essid):
+            conn = self._connected_name() or "the network this Mac is joined to"
+            messagebox.showinfo(
+                "Connect to this network first",
+                f"LanLens can only list the devices on the Wi-Fi this Mac is "
+                f"actually connected to ({conn}).\n\n"
+                f"“{essid}” isn't that network, so its devices can't be seen "
+                f"from here. Connect your Mac to it first, then open its "
+                f"devices.")
+            return
+        essid = netreg_netsel.strip_suffix(essid, suf)  # drop "(connected)" marker
         self.set_status(f"Opening devices on {essid or 'network'}…", "work")
         # Open the devices window in-process so it appears instantly. We do NOT
         # fall back to launching a separate Python program: from a cloud-synced
