@@ -144,6 +144,28 @@ check("helper runner returns None for scan off macOS (safe fallback)",
 check("build glob bundles mac_wifi_helper.py",
       "for f in *.py" in open(os.path.join(HERE, "build_macapp.sh")).read())
 
+print("modern-Tk python picker (blank-window fix):")
+pp = os.path.join(HERE, "packaging", "pick_python.sh")
+check("pick_python.sh exists", os.path.exists(pp))
+syn2 = subprocess.run(["bash", "-n", pp], capture_output=True, text=True)
+check("pick_python.sh passes `bash -n`", syn2.returncode == 0)
+ppsrc = open(pp).read()
+check("picker requires Tk >= 8.6.13", "(8, 6, 13)" in ppsrc)
+bmsrc = open(os.path.join(HERE, "build_macapp.sh")).read()
+check("bundle launcher sources pick_python.sh", "pick_python.sh" in bmsrc
+      and "lanlens_pick_python" in bmsrc)
+check("build bundles pick_python.sh into Resources",
+      'cp packaging/pick_python.sh' in bmsrc)
+rcsrc = open(os.path.join(HERE, "run.command")).read()
+check("run.command uses the picker", "lanlens_pick_python" in rcsrc)
+# The version gate accepts >=8.6.13 and rejects older (the broken 8.6.11).
+def _accepts(pl):
+    v = tuple(int(x) for x in pl.split(".")[:3])
+    return v >= (8, 6, 13)
+check("version gate rejects 8.6.11 (the broken one)", not _accepts("8.6.11"))
+check("version gate accepts 8.6.13 and 8.6.15",
+      _accepts("8.6.13") and _accepts("8.6.15"))
+
 print()
 if fails:
     print(f"{len(fails)}/{total} FAILED: {fails}")

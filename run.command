@@ -25,7 +25,14 @@ if [ -d .git ] && command -v git >/dev/null 2>&1; then
   git pull --ff-only 2>&1 || echo "(couldn't update — launching the current version)"
 fi
 
-PYBIN="$(command -v python3 || command -v python)"
+# Prefer a python3 whose Tk is >= 8.6.13 (older Tk paints a blank window on
+# recent macOS). Falls back to whatever python3/python is on PATH.
+PYBIN=""
+if [ -f packaging/pick_python.sh ]; then
+  . packaging/pick_python.sh
+  PYBIN="$(lanlens_pick_python 2>/dev/null)"
+fi
+[ -n "$PYBIN" ] || PYBIN="$(command -v python3 || command -v python)"
 if [ -z "$PYBIN" ]; then
   warn "Python 3 is required but was not found. Install it from https://www.python.org/downloads/ then double-click again."
   read -r -p "Press Return to close… " _ ; exit 1
