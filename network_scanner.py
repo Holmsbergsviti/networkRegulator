@@ -97,6 +97,7 @@ class WifiNetworksUI(tk.Tk):
             else:
                 self.tree.column(col, width=80, anchor="center")
         ui.style_tree(self.tree)
+        ui.enable_copy(self.tree)
         self.tree.bind("<Double-1>", self.on_double_click)
 
         # Empty-state hint shown inside the (otherwise blank) table.

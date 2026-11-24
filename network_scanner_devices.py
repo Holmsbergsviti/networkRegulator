@@ -134,6 +134,7 @@ class DevicesUI(tk.Toplevel):
             else:
                 self.tree.column(col, width=150, anchor="w")
         ui.style_tree(self.tree)
+        ui.enable_copy(self.tree)
         # A newly-joined (never-seen-before) device is highlighted until the
         # window is closed.
         self.tree.tag_configure("new", background="#6b5d1f", foreground="white")
