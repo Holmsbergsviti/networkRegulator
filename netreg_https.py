@@ -27,6 +27,7 @@ binary and a real device, so that path is exercised on the Mac, not in CI.
 """
 from __future__ import annotations
 
+import ipaddress
 import json
 import os
 import shutil
@@ -134,6 +135,10 @@ def build_pf_rules(target_ip: str, port: int = PROXY_PORT) -> str:
     if not target_ip:
         raise ValueError("a target IP is required (refusing to redirect the "
                          "whole network)")
+    try:
+        ipaddress.ip_address(target_ip)
+    except ValueError:
+        raise ValueError(f"not a valid IP address: {target_ip!r}")
     return (
         f"rdr pass inet proto tcp from {target_ip} to any port 80 -> "
         f"127.0.0.1 port {port}\n"
@@ -143,6 +148,14 @@ def build_pf_rules(target_ip: str, port: int = PROXY_PORT) -> str:
 
 def _sh_quote(s: str) -> str:
     return "'" + s.replace("'", "'\\''") + "'"
+
+
+def _osa_escape(s: str) -> str:
+    """Escape for an AppleScript double-quoted literal. osascript runs
+    `do shell script "<this>"`, so a bare " or \\ in the command would
+    break out of the literal; escape both. Applied on top of the shell
+    quoting (_sh_quote), which is a separate layer."""
+    return s.replace("\\", "\\\\").replace('"', '\\"')
 
 
 def build_setup_script(target_ip: str, flow_log: str, rules_path: str,
@@ -273,7 +286,16 @@ class InspectSession:
 
         self.flow_log = default_flow_log_path()
         try:
-            open(self.flow_log, "w").close()  # start empty
+            # 0600: the flow log holds decrypted request/response content
+            # (headers, cookies, bodies) for the target device, so keep it
+            # readable only by this user. Start it empty.
+            fd = os.open(self.flow_log,
+                         os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            os.close(fd)
+            try:
+                os.chmod(self.flow_log, 0o600)
+            except OSError:
+                pass
         except Exception:
             return False, f"Can't write the flow log at {self.flow_log}."
 
@@ -289,7 +311,8 @@ class InspectSession:
         script = build_setup_script(target_ip, self.flow_log,
                                     self._rules_path, self.port)
         launch = ["osascript", "-e",
-                  f'do shell script "{script}" with administrator privileges']
+                  f'do shell script "{_osa_escape(script)}" '
+                  f'with administrator privileges']
         try:
             self._proc = subprocess.Popen(launch, stdout=subprocess.DEVNULL,
                                           stderr=subprocess.DEVNULL)
@@ -318,7 +341,8 @@ class InspectSession:
         try:
             subprocess.run(
                 ["osascript", "-e",
-                 f'do shell script "{teardown}" with administrator privileges'],
+                 f'do shell script "{_osa_escape(teardown)}" '
+                 f'with administrator privileges'],
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         except Exception:
             pass
@@ -328,12 +352,25 @@ class InspectSession:
             except Exception:
                 pass
         self._rules_path = None
+        # The flow log holds decrypted content (cookies, auth headers, login
+        # bodies). Don't leave it on disk after the session ends.
+        if self.flow_log:
+            for p in (self.flow_log, self.flow_log + ".err"):
+                try:
+                    if os.path.exists(p):
+                        os.remove(p)
+                except OSError:
+                    pass
+        self.flow_log = None
         if not self._target:
             return True, "HTTPS inspection wasn't running."
         target, self._target = self._target, ""
         return True, (f"Stopped inspecting {target}. The pf redirect and proxy "
-                      f"are removed; HTTPS goes straight through again. Remember "
-                      f"to remove the certificate from the device when done.")
+                      f"are removed, and the decrypted-traffic log has been "
+                      f"deleted. On the device, remove mitmproxy's certificate "
+                      f"now — while it stays trusted, this Mac can read that "
+                      f"device's HTTPS. (mitmproxy's CA private key lives in "
+                      f"~/.mitmproxy; regenerate it if it is ever exposed.)")
 
 
 if __name__ == "__main__":

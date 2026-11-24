@@ -209,6 +209,11 @@ class PrintCaptureUI(tk.Toplevel):
             f"Capture traffic between this Mac and the printer at {self.ip}?\n\n"
             "Only proceed on a printer/network you own or are authorized to test."):
             return
+        try:
+            import netreg_attest
+            netreg_attest.record("print-capture", self.ip)
+        except Exception:
+            pass
         self.busy = True
         self._sync_buttons()
         self.status_var.set("Starting… you may be asked for your password.")
