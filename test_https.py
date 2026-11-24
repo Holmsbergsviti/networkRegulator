@@ -98,6 +98,36 @@ check("snippet length capped",
 check("whitespace collapsed",
       addon._snippet(b"a\n\n   b\tc", "text/plain") == "a b c")
 
+print("addon header/body capture (Burp-style detail):")
+check("headers render as Name: value block",
+      addon._headers({"Host": "ex.com", "Accept": "*/*"}) == "Host: ex.com\nAccept: */*")
+check("textual body kept up to BODY_MAX",
+      addon._body(b'{"ok":true}', "application/json") == '{"ok":true}')
+check("long textual body capped at BODY_MAX",
+      len(addon._body(b"x" * 20000, "text/plain")) == addon.BODY_MAX)
+check("binary body noted with size, not dumped",
+      addon._body(b"\x89PNG\r\n", "image/png")
+      == f"[binary body, 6 bytes — not shown]")
+check("headers block capped at HEADERS_MAX",
+      len(addon._headers({"X": "y" * 20000})) == addon.HEADERS_MAX)
+
+print("parse_flow_line carries Burp-style detail fields:")
+detail = json.dumps({"ts": 1.0, "client": "192.168.1.50", "method": "POST",
+                     "scheme": "https", "host": "api.example.com", "path": "/login",
+                     "status": 200, "content_type": "application/json",
+                     "req_bytes": 20, "resp_bytes": 30, "snippet": "{}",
+                     "req_headers": "Host: api.example.com",
+                     "req_body": '{"user":"vlad"}',
+                     "resp_headers": "Server: nginx",
+                     "resp_body": '{"ok":true}'})
+drec = h.parse_flow_line(detail)
+check("passes req_headers + req_body through",
+      drec["req_headers"] == "Host: api.example.com" and drec["req_body"] == '{"user":"vlad"}')
+check("passes resp_headers + resp_body through",
+      drec["resp_headers"] == "Server: nginx" and drec["resp_body"] == '{"ok":true}')
+check("detail fields default to '' when absent",
+      rec.get("req_headers") == "" and rec.get("resp_body") == "")
+
 print("preflight degrades gracefully:")
 ready, msg = h.preflight()
 check("preflight returns (bool, str)", isinstance(ready, bool) and isinstance(msg, str))

@@ -185,6 +185,11 @@ def parse_flow_line(line: str):
         "req_bytes": rec.get("req_bytes", 0),
         "resp_bytes": rec.get("resp_bytes", 0),
         "snippet": rec.get("snippet", ""),
+        # Burp-style detail fields (may be absent in older logs -> "").
+        "req_headers": rec.get("req_headers", ""),
+        "req_body": rec.get("req_body", ""),
+        "resp_headers": rec.get("resp_headers", ""),
+        "resp_body": rec.get("resp_body", ""),
     }
 
 
