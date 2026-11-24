@@ -22,6 +22,7 @@ import netreg_ui as ui
 import netreg_devicedb
 import netreg_netsel
 import netreg_report
+import netreg_snapdiff
 from netreg_backend import get_backend
 
 REFRESH_MS = 1000
@@ -106,6 +107,9 @@ class DevicesUI(tk.Toplevel):
         self.snapshot_btn = ttk.Button(actions, text="Save snapshot",
                                        command=self.save_snapshot)
         self.snapshot_btn.pack(side="left", padx=(8, 0))
+        self.compare_btn = ttk.Button(actions, text="Compare snapshot…",
+                                      command=self.compare_snapshot)
+        self.compare_btn.pack(side="left", padx=(8, 0))
         self.disc_btn = ttk.Button(actions, text="Disconnect Selected", style="Danger.TButton",
                                    command=self.disconnect_selected)
         self.disc_btn.pack(side="left", padx=(8, 0))
@@ -360,6 +364,52 @@ class DevicesUI(tk.Toplevel):
             vals[0] = self.db.label(mac)
             self.tree.item(iid, values=vals)
         self.set_status(f"Labelled {mac} as “{self.db.label(mac) or '(cleared)'}”.", "ok")
+
+    def _current_devices(self):
+        devices = []
+        for iid in self.tree.get_children():
+            if iid == self._empty_iid:
+                continue
+            devices.append(dict(zip(self.display_columns,
+                                    self.tree.item(iid, "values"))))
+        return devices
+
+    def compare_snapshot(self):
+        """Diff the current device list against a saved snapshot .md and show
+        what joined, left, or changed address since then."""
+        current = self._current_devices()
+        if not current:
+            messagebox.showinfo("Compare snapshot",
+                                "No devices in the list yet — run a scan first.")
+            return
+        path = filedialog.askopenfilename(
+            parent=self, title="Pick a saved snapshot to compare against",
+            filetypes=[("Markdown snapshot", "*.md"), ("All files", "*.*")])
+        if not path:
+            return
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                old = netreg_snapdiff.parse_devices(f.read())
+        except Exception as e:
+            messagebox.showerror("Couldn't read snapshot",
+                                 f"Reading the snapshot failed:\n\n{e}")
+            return
+        if not old:
+            messagebox.showwarning(
+                "Nothing to compare",
+                "That file has no device table LanLens can read — is it a "
+                "snapshot saved by Save snapshot?")
+            return
+        result = netreg_snapdiff.diff_devices(old, current)
+        summary = netreg_snapdiff.format_diff(result)
+        n_changes = (len(result["added"]) + len(result["removed"])
+                     + len(result["changed"]))
+        if n_changes:
+            messagebox.showwarning("Changes since the snapshot", summary)
+            self.set_status(f"Snapshot compare: {n_changes} change(s).", "warn")
+        else:
+            messagebox.showinfo("No changes", summary)
+            self.set_status("Snapshot compare: no changes.", "ok")
 
     def save_snapshot(self):
         """Write the current device list (and this network) to a Markdown
