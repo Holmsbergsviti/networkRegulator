@@ -101,11 +101,13 @@ class DevicesUI(tk.Toplevel):
             self._can_route = netreg_mitm.available() and ("IP" in self.columns)
         except Exception:
             self._can_route = False
+        # Gated features stay CLICKABLE but look locked, so clicking one explains
+        # what's missing (via its command's messagebox) instead of doing nothing.
         if not self._can_route:
-            self.route_btn.config(state="disabled")
-            self.cut_btn.config(state="disabled")
+            self.route_btn.config(style="Locked.TButton", text="🔒 Route via this Mac")
+            self.cut_btn.config(style="Locked.TButton", text="🔒 Cut off internet")
         if not self.caps.can_deauth:
-            self.disc_btn.config(state="disabled")
+            self.disc_btn.config(style="Locked.TButton", text="🔒 Disconnect Selected")
 
         # --- status line ---------------------------------------------------
         self.status = ui.StatusBar(self)
@@ -155,7 +157,8 @@ class DevicesUI(tk.Toplevel):
         except Exception:
             pass
         if not self.caps.can_deauth:
-            foot += "   The Disconnect button is off: " + self.caps.deauth_note
+            foot += ("   The Disconnect button is locked (click it to see why): "
+                     + self.caps.deauth_note)
         ttk.Label(self, text=foot, style="Muted.TLabel", wraplength=1000,
                   justify="left").pack(fill="x", padx=18, pady=(0, 14))
 
@@ -410,10 +413,21 @@ class DevicesUI(tk.Toplevel):
     def _open_route(self, cut=False):
         what = "cut a device off" if cut else "route a device's traffic"
         if not getattr(self, "_can_route", False):
-            messagebox.showinfo(
-                "Not available",
-                f"This needs bettercap (install it with: brew install "
-                f"bettercap) and a device with an IP address.")
+            try:
+                import netreg_mitm
+                have_bettercap = netreg_mitm.available()
+            except Exception:
+                have_bettercap = False
+            if not have_bettercap:
+                reason = ("This feature drives bettercap, which isn't installed.\n\n"
+                          "Install it, then relaunch LanLens:\n"
+                          "    brew install bettercap\n\n"
+                          "(It also needs your admin password when you start, and "
+                          "only works on a network you own.)")
+            else:
+                reason = ("This needs a device that has an IP address on this "
+                          "network. The current list has no IP column to target.")
+            messagebox.showinfo("Why this is locked", reason)
             return
         sel = self.tree.selection()
         if not sel or sel[0] == self._empty_iid:
@@ -441,7 +455,7 @@ class DevicesUI(tk.Toplevel):
 
     def disconnect_selected(self):
         if not self.caps.can_deauth:
-            messagebox.showinfo("Not available", self.caps.deauth_note)
+            messagebox.showinfo("Why this is locked", self.caps.deauth_note)
             return
         station = self._selected_station()
         bssid = self.target.get("BSSID", "")

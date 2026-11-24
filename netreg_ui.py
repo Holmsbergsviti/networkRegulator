@@ -132,6 +132,16 @@ def apply_theme(root):
                               ("disabled", "#f5f0f0")],
                   foreground=[("disabled", "#d3a3a5")])
 
+        # "Locked" button: looks inactive (greyed, like a disabled button) but
+        # is still clickable, so a click can explain WHAT is missing instead of
+        # silently doing nothing. Used for features gated on a tool/hardware.
+        style.configure("Locked.TButton", font=base, padding=(14, 7),
+                        background="#f0f1f3", foreground="#9aa0a9",
+                        bordercolor=BORDER, focusthickness=0, relief="flat")
+        style.map("Locked.TButton",
+                  background=[("pressed", "#e7e9ec"), ("active", "#e9ebef")],
+                  foreground=[("active", "#7b818b")])
+
         # treeview -------------------------------------------------------
         style.configure("Treeview", background=SURFACE, fieldbackground=SURFACE,
                         foreground=INK, rowheight=30, font=base,
