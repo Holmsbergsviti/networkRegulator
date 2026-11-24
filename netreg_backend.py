@@ -231,6 +231,16 @@ class Capabilities:
 # --------------------------------------------------------------------------- #
 class Backend:
     name = "base"
+    # Suffix a backend appends to the ESSID of the network this machine is
+    # currently joined to, so the UI can tell which row is the connected
+    # one. Empty on backends that cannot determine it.
+    CONNECTED_SUFFIX = ""
+
+    def connected_ssid(self) -> str:
+        """Name of the Wi-Fi this machine is currently connected to, or ""
+        if unknown. The device list can only scan the connected network, so
+        the UI uses this to stay honest about what it is showing."""
+        return ""
 
     def prepare(self):
         """Called once at GUI startup for any one-time setup (e.g. permissions)."""
@@ -507,6 +517,9 @@ class MacBackend(Backend):
         else:
             note += " macOS does not expose other networks' BSSIDs."
         return out, note
+
+    def connected_ssid(self) -> str:
+        return self._connected_ssid()
 
     def _connected_ssid(self) -> str:
         """Real SSID of the network we're on. Tries CoreWLAN (works in the
