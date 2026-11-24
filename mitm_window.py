@@ -165,6 +165,7 @@ class MitmUI(tk.Toplevel):
                                       command=self.tree.yview)
         self.tree.configure(yscrollcommand=self.tree_vsb.set)
         ui.style_tree(self.tree)
+        ui.enable_copy(self.tree)
 
         # raw per-packet log (hidden until toggled)
         self.traffic_text = tk.Text(traffic, height=11, wrap="none",
@@ -203,6 +204,7 @@ class MitmUI(tk.Toplevel):
             hvsb.pack(side="right", fill="y")
             self.https_tree.pack(side="left", fill="both", expand=True)
             ui.style_tree(self.https_tree)
+            ui.enable_copy(self.https_tree)
             # packed on demand by _toggle_https so it takes no space when unused
 
         bottom = ttk.Frame(self); bottom.pack(fill="x", padx=12, pady=(0, 8))

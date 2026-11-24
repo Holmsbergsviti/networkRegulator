@@ -269,6 +269,69 @@ def restripe(tree):
         pass
 
 
+def enable_copy(tree):
+    """Let the user copy rows out of a Treeview: Cmd+C / Ctrl+C copies the
+    selected row(s) as tab-separated text, and a right-click menu offers
+    'Copy row(s)' plus 'Copy cell' (just the one value under the cursor).
+    Makes the data in any results table selectable + pasteable elsewhere."""
+    def _to_clip(text):
+        try:
+            tree.clipboard_clear()
+            tree.clipboard_append(text)
+        except Exception:
+            pass
+
+    def _row_text(iids):
+        lines = []
+        for iid in iids:
+            vals = tree.item(iid, "values")
+            lines.append("\t".join("" if v is None else str(v) for v in vals))
+        return "\n".join(lines)
+
+    def copy_rows(_e=None):
+        sel = tree.selection()
+        if sel:
+            _to_clip(_row_text(sel))
+        return "break"
+
+    tree.bind("<Command-c>", copy_rows)   # macOS
+    tree.bind("<Command-C>", copy_rows)
+    tree.bind("<Control-c>", copy_rows)   # Windows / Linux
+    tree.bind("<Control-C>", copy_rows)
+
+    menu = tk.Menu(tree, tearoff=0)
+    _click = {"cell": ""}
+    menu.add_command(label="Copy row(s)", command=copy_rows)
+    menu.add_command(label="Copy cell",
+                     command=lambda: _to_clip(_click["cell"]))
+
+    def _popup(event):
+        iid = tree.identify_row(event.y)
+        if not iid:
+            return
+        if iid not in tree.selection():
+            tree.selection_set(iid)
+        col = tree.identify_column(event.x)  # like '#2'
+        cell = ""
+        try:
+            if col and col.startswith("#") and col != "#0":
+                cell = str(tree.item(iid, "values")[int(col[1:]) - 1])
+        except Exception:
+            cell = ""
+        _click["cell"] = cell
+        menu.entryconfigure("Copy cell", state=("normal" if cell else "disabled"))
+        try:
+            menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            menu.grab_release()
+
+    tree.bind("<Button-2>", _popup)       # macOS right-click / two-finger
+    tree.bind("<Button-3>", _popup)       # Windows / Linux right-click
+    # Expose for programmatic use / tests (same action as Cmd/Ctrl+C).
+    tree.copy_selection = copy_rows
+    return tree
+
+
 class StatusBar(ttk.Frame):
     """A single-line status area with a coloured dot + message.
 

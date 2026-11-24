@@ -246,6 +246,7 @@ class DeviceDetailUI(tk.Toplevel):
             self.tree.heading(c, text=c)
             self.tree.column(c, width=w, anchor=anchor)
         ui.style_tree(self.tree)
+        ui.enable_copy(self.tree)
         self.tree.tag_configure("openable", foreground=ui.ACCENT)
         # A risky service (Telnet, plain FTP, exposed SMB, …) is flagged in red;
         # configured last so its colour wins over the "openable" accent.
