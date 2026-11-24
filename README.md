@@ -82,6 +82,13 @@ one-time Gatekeeper step.
 > paid account) is only required to *distribute* the app to other Macs without
 > the Gatekeeper warning — it is **not** needed for the permissions to work
 > locally.
+- **Blank / dark window on launch?** That's an old Tk (the GUI toolkit): Tk
+  versions before 8.6.13 don't paint on recent macOS. The app and `run.command`
+  now auto-pick a Python with a modern Tk, but if you launch it by hand use a
+  recent python.org or Homebrew Python, e.g.
+  `/Library/Frameworks/Python.framework/Versions/3.13/bin/python3 network_scanner.py`.
+  (Also: if the window seems missing entirely, it may be behind a **full-screen**
+  app on another Space — exit full-screen or swipe to the desktop.)
 - **Disconnecting** a device needs packet injection, which the **built-in Mac
   card cannot do**. To enable it:
   1. `brew install aircrack-ng`

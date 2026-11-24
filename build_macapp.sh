@@ -57,6 +57,8 @@ for f in *.py; do
 done
 # Bundle the OUI (MAC -> manufacturer) database so vendor lookup works.
 cp data/oui_vendors.tsv.gz "$APP/Contents/Resources/data/"
+# Bundle the interpreter picker so the launcher can choose a modern-Tk python3.
+cp packaging/pick_python.sh "$APP/Contents/Resources/"
 
 # ---- Info.plist (from packaging/appinfo.py) ---------------------------------
 echo "==> Writing Info.plist"
@@ -90,7 +92,15 @@ cat > "$APP/Contents/MacOS/${APP_NAME}" <<LAUNCH
 #!/bin/bash
 DIR="\$(cd "\$(dirname "\$0")/../Resources" && pwd)"
 cd "\$DIR"
-exec /usr/bin/env python3 ${ENTRY}.py
+# Pick a python3 whose Tk is >= 8.6.13; an older Tk paints a blank window on
+# recent macOS. Falls back to env python3 if the picker isn't present.
+PY="/usr/bin/env python3"
+if [ -f "\$DIR/pick_python.sh" ]; then
+  . "\$DIR/pick_python.sh"
+  PICKED="\$(lanlens_pick_python)"
+  [ -n "\$PICKED" ] && PY="\$PICKED"
+fi
+exec \$PY ${ENTRY}.py
 LAUNCH
 chmod +x "$APP/Contents/MacOS/${APP_NAME}"
 
