@@ -52,6 +52,22 @@ def normalize_mac(mac: str) -> str:
     return m if m and m != "ff:ff:ff:ff:ff:ff" else ""
 
 
+def is_private_mac(mac: str) -> bool:
+    """True if `mac` is a locally-administered (randomized / "private")
+    address. Phones and laptops use these as a privacy feature; such a MAC
+    isn't tied to the hardware and can rotate, so a saved label or "known
+    device" won't follow it. Detected via the locally-administered bit (0x02)
+    of the first octet."""
+    m = normalize_mac(mac)
+    if not m:
+        return False
+    first = m.replace("-", ":").split(":")[0]
+    try:
+        return bool(int(first, 16) & 0x02)
+    except ValueError:
+        return False
+
+
 class DeviceDB:
     def __init__(self, path: str | None = None, clock=time.time):
         self.path = path or default_path()
@@ -104,6 +120,12 @@ class DeviceDB:
     # ---- labels (feature: custom device labels) ---------------------------
     def label(self, mac: str) -> str:
         return self._data.get(normalize_mac(mac), {}).get("label", "")
+
+    def seen_info(self, mac: str):
+        """(first_seen, last_seen) epoch floats for this MAC, or (None, None)
+        if we have never recorded it."""
+        rec = self._data.get(normalize_mac(mac), {})
+        return rec.get("first_seen"), rec.get("last_seen")
 
     def set_label(self, mac: str, text: str, save: bool = True) -> bool:
         key = normalize_mac(mac)
