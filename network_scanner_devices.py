@@ -20,6 +20,7 @@ from tkinter import ttk, messagebox, simpledialog, filedialog
 
 import netreg_ui as ui
 import netreg_devicedb
+import netreg_netsel
 import netreg_report
 from netreg_backend import get_backend
 
@@ -55,7 +56,18 @@ class DevicesUI(tk.Toplevel):
         self._first_sweep = True
         self._new_macs = set()   # MACs flagged NEW this session (stay highlighted)
 
-        self.title(f"Devices on {essid or '(network)'} ({self.backend.name})")
+        # Be honest about what the device list actually scans: on macOS it
+        # can only see the network this Mac is joined to, whatever row was
+        # clicked. Prefer the backend's live connected SSID; fall back to the
+        # name passed in (minus any "(connected)" marker).
+        _suf = getattr(self.backend, "CONNECTED_SUFFIX", "") or ""
+        _shown = netreg_netsel.strip_suffix(essid, _suf)
+        try:
+            _conn = (self.backend.connected_ssid() or "").strip()
+        except Exception:
+            _conn = ""
+        self._net_label = _conn or _shown or "(network)"
+        self.title(f"Devices on {self._net_label} ({self.backend.name})")
         self.geometry("1040x640")
         self.minsize(820, 480)
         self.scanning = False
@@ -64,8 +76,10 @@ class DevicesUI(tk.Toplevel):
         ui.apply_theme(self)
 
         # --- header band ---------------------------------------------------
-        head = ui.header(self, essid or "Devices",
-                         "Devices seen on this network. Double-click one for details and open ports.")
+        head = ui.header(self, self._net_label or "Devices",
+                         f"Devices on {self._net_label}, the Wi-Fi this "
+                         f"computer is connected to — the only network LanLens "
+                         f"can scan. Double-click one for details and open ports.")
         btns = ttk.Frame(head, style="Header.TFrame")
         btns.pack(side="right")
         self.start_btn = ttk.Button(btns, text="Start Scan", style="Accent.TButton",
