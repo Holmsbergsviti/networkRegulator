@@ -15,6 +15,7 @@ import netreg_ui as ui
 from netreg_backend import NETWORK_COLUMNS, get_backend
 import netreg_netsel
 import netreg_restore
+import netreg_rogue
 
 REFRESH_MS = 1500
 
@@ -55,6 +56,9 @@ class WifiNetworksUI(tk.Tk):
         self.channels_btn = ttk.Button(btns, text="Channel analyzer",
                                        command=self.open_channel_analyzer)
         self.channels_btn.pack(side="left", padx=(8, 0))
+        self.rogue_btn = ttk.Button(btns, text="Rogue-AP check",
+                                    command=self.run_rogue_check)
+        self.rogue_btn.pack(side="left", padx=(8, 0))
         self.speed_btn = ttk.Button(btns, text="Speed test",
                                      command=self.run_speed_test)
         self.speed_btn.pack(side="left", padx=(8, 0))
@@ -321,6 +325,29 @@ class WifiNetworksUI(tk.Tk):
 
         if ui.open_child_window(_open, "the devices window", parent=self) is None:
             self.set_status("Couldn't open the devices window — see the error.", "error")
+
+    def run_rogue_check(self):
+        """Flag evil-twin / rogue-AP patterns in the networks currently
+        scanned (same name both secured and open; one name on several BSSIDs)."""
+        nets = self._current_networks()
+        if not nets:
+            messagebox.showinfo("Rogue-AP check",
+                                "No networks scanned yet — press Start Scan first.")
+            return
+        alerts = netreg_rogue.analyze(nets)
+        if not alerts:
+            messagebox.showinfo(
+                "Rogue-AP check",
+                f"Nothing suspicious across {len(nets)} network(s): no name is "
+                f"both secured and open, and no duplicate access points stand "
+                f"out.\n\n(On macOS other networks' BSSIDs are hidden, so the "
+                f"duplicate-AP check has less to work with there.)")
+            self.set_status("Rogue-AP check: nothing suspicious.", "ok")
+            return
+        messagebox.showwarning(
+            "Rogue-AP check — take a look",
+            "\n\n".join(f"\u2022 {a}" for a in alerts))
+        self.set_status(f"Rogue-AP check: {len(alerts)} thing(s) to review.", "warn")
 
     def _current_networks(self):
         """The networks currently in the table, as dicts the channel analyzer
