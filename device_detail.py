@@ -26,8 +26,11 @@ import urllib.request
 import tkinter as tk
 from tkinter import ttk, messagebox
 
+import datetime
+
 import netreg_ui as ui
 import netreg_probe as probe
+import netreg_devicedb
 import netreg_fingerprint as fingerprint
 from netreg_backend import (scan_ports, service_name, ping_host,
                             resolve_hostname, vendor_for_mac)
@@ -147,6 +150,14 @@ def web_label(info):
     return "✓ Yes — " + " · ".join(bits) + note, "ok"
 
 
+def _fmt_time(epoch) -> str:
+    """A short local date/time for a stored epoch, or "?" if unusable."""
+    try:
+        return datetime.datetime.fromtimestamp(float(epoch)).strftime("%b %d, %H:%M")
+    except Exception:
+        return "?"
+
+
 def open_url(url):
     """Hand a url/scheme to the OS to open with whatever app is registered."""
     if sys.platform == "darwin":
@@ -191,14 +202,17 @@ class DeviceDetailUI(tk.Toplevel):
         info = ttk.LabelFrame(self, text="Device", padding=(4, 6))
         info.pack(fill="x", padx=16, pady=(14, 10))
         self.vars = {}
-        for label in ("IP", "MAC", "Vendor", "Type", "Hostname", "Reachable", "Web interface"):
+        self._value_lbls = {}
+        for label in ("IP", "MAC", "Address", "Vendor", "Type", "Hostname",
+                      "Seen", "Reachable", "Web interface"):
             row = ttk.Frame(info, style="Card.TFrame")
             row.pack(fill="x", padx=10, pady=3)
             ttk.Label(row, text=label, width=13, anchor="w", style="Field.TLabel").pack(side="left")
             var = tk.StringVar(value="…")
             self.vars[label] = var
-            ttk.Label(row, textvariable=var, anchor="w", style="Value.TLabel").pack(
-                side="left", fill="x", expand=True)
+            vlbl = ttk.Label(row, textvariable=var, anchor="w", style="Value.TLabel")
+            vlbl.pack(side="left", fill="x", expand=True)
+            self._value_lbls[label] = vlbl
 
         self.vars["IP"].set(self.ip or "(unknown)")
         self.vars["MAC"].set(self.mac or "—")
@@ -208,6 +222,10 @@ class DeviceDetailUI(tk.Toplevel):
         self.vars["Hostname"].set(self.hostname or "…")
         self.vars["Reachable"].set("checking…")
         self.vars["Web interface"].set("checking…" if self.ip else "—")
+        self._set_address_and_seen()
+        # The "Web interface" line opens the device's web UI when it has one.
+        self._web_info = None
+        self._value_lbls["Web interface"].bind("<Button-1>", self._open_web)
         self._refresh_type()  # first guess from vendor/hostname; refined by the scan
 
         # --- action bar ----------------------------------------------------
@@ -313,6 +331,36 @@ class DeviceDetailUI(tk.Toplevel):
         else:
             self.vars["Type"].set("Unknown")
 
+    def _set_address_and_seen(self):
+        """Fill the Address (hardware vs private/rotating) and Seen (first/
+        last time LanLens saw this MAC) rows. Best-effort; never blocks."""
+        if not self.mac:
+            self.vars["Address"].set("—")
+            self.vars["Seen"].set("—")
+            return
+        if netreg_devicedb.is_private_mac(self.mac):
+            self.vars["Address"].set("Private / rotating — this device randomizes "
+                                     "its MAC (a label may not stick to it)")
+        else:
+            self.vars["Address"].set("Globally unique (hardware) MAC")
+        try:
+            first, last = netreg_devicedb.DeviceDB().seen_info(self.mac)
+        except Exception:
+            first = last = None
+        if not first:
+            self.vars["Seen"].set("new to LanLens (not recorded before)")
+        else:
+            self.vars["Seen"].set(f"first {_fmt_time(first)} · last {_fmt_time(last)}")
+
+    def _open_web(self, _event=None):
+        """Open the device's web interface, if it has one, in the browser."""
+        info = getattr(self, "_web_info", None)
+        url = (info or {}).get("url") if isinstance(info, dict) else None
+        if not url and self.ip:
+            url = f"http://{self.ip}"
+        if url:
+            open_url(url)
+
     def _probe_web(self):
         info = probe_web(self.ip)
         text, _state = web_label(info)
@@ -324,6 +372,11 @@ class DeviceDetailUI(tk.Toplevel):
 
     def _apply_web_result(self, text, risk):
         self.vars["Web interface"].set(text)
+        try:
+            has_web = isinstance(self._web_info, dict) and bool(self._web_info.get("url"))
+            self._value_lbls["Web interface"].configure(cursor="hand2" if has_web else "")
+        except Exception:
+            pass
         if risk:
             self._web_risk = risk
             self._refresh_risk_banner()
