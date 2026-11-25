@@ -14,6 +14,7 @@ from tkinter import ttk, messagebox
 import netreg_ui as ui
 from netreg_backend import NETWORK_COLUMNS, get_backend
 import netreg_netsel
+import netreg_restore
 
 REFRESH_MS = 1500
 
@@ -59,6 +60,13 @@ class WifiNetworksUI(tk.Tk):
         self.speed_btn.pack(side="left", padx=(8, 0))
         self.recover_btn = ttk.Button(btns, text="Restore Wi-Fi", command=self.run_recovery)
         self.recover_btn.pack(side="left", padx=(8, 0))
+        # Panic button: undo ALL network manipulation (routing/cut-off, pf
+        # redirect + mitmproxy, print capture) even after a crash left it
+        # running. Distinct from "Restore Wi-Fi", which only cycles the card.
+        self.panic_btn = ttk.Button(btns, text="Restore network",
+                                    style="Danger.TButton",
+                                    command=self.panic_restore)
+        self.panic_btn.pack(side="left", padx=(8, 0))
 
         # --- status line ---------------------------------------------------
         self.status = ui.StatusBar(self)
@@ -123,6 +131,9 @@ class WifiNetworksUI(tk.Tk):
         # app, so on macOS it can appear behind whatever is already frontmost
         # (and if another app is in full-screen, on a different Space entirely).
         self.after(0, self._bring_to_front)
+        # After a crash, a previous run's spoof/redirect may still be live.
+        # Detect it (no password prompt just to look) and offer to undo it.
+        self.after(1500, self._check_leftovers)
 
     def _bring_to_front(self):
         """Lift + focus the window so it doesn't hide behind other windows."""
@@ -363,6 +374,55 @@ class WifiNetworksUI(tk.Tk):
                         parent=self)
 
             self.after(0, done)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _do_restore(self):
+        """Run the stateless full teardown in the background (the caller has
+        already confirmed)."""
+        if self.scanning:
+            self.stop_scan()
+        self.set_status("Restoring network…", "work")
+
+        def worker():
+            ok, msg = netreg_restore.restore_all()
+            self.after(0, lambda: self.set_status(msg, "ok" if ok else "error"))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def panic_restore(self):
+        """Stop and undo every network manipulation LanLens can start."""
+        active = netreg_restore.active_manipulations()
+        if active:
+            msg = ("This stops and undoes:\n\n  • " + "\n  • ".join(active)
+                   + "\n\nYou may be asked for your password.")
+        else:
+            msg = ("Nothing looks active, but this makes sure: it stops any "
+                   "routing, cut-off or inspection and clears the pf redirect "
+                   "and IP forwarding.\n\nYou may be asked for your password.")
+        if not messagebox.askyesno("Restore network", msg):
+            return
+        self._do_restore()
+
+    def _check_leftovers(self):
+        """On startup, detect manipulations left running by a previous crash
+        and offer to undo them. Detection is unprivileged; only a yes prompts
+        for a password."""
+        def worker():
+            procs = netreg_restore.leftover_processes()
+            if not procs:
+                return
+
+            def ask():
+                if messagebox.askyesno(
+                        "Leftover network changes",
+                        "LanLens found changes from a previous run still "
+                        "active:\n\n  • " + "\n  • ".join(procs) + "\n\n"
+                        "These can leave a device cut off or its traffic "
+                        "redirected. Undo them now? (You may be asked for your "
+                        "password.)"):
+                    self._do_restore()
+            self.after(0, ask)
 
         threading.Thread(target=worker, daemon=True).start()
 
