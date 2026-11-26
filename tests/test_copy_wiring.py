@@ -1,6 +1,10 @@
 """Static checks that table copy support is wired in. Run: python3
 test_copy_wiring.py (offline, no display needed -- it reads source, it does not
 build a GUI; the live copy behaviour is verified under Xvfb separately)."""
+# Ensure the repo root is importable when this suite is run from tests/.
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+
 import os
 
 fails = []
@@ -15,7 +19,7 @@ def check(name, cond):
         fails.append(name)
 
 
-HERE = os.path.dirname(os.path.abspath(__file__))
+HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 def src(name):

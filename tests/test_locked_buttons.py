@@ -3,6 +3,10 @@ stay CLICKABLE and explain what's missing when clicked, instead of being a dead
 greyed button that does nothing. Static checks run anywhere; the live check runs
 only if a Tk display is available (e.g. under Xvfb).
 Run: python3 test_locked_buttons.py"""
+# Ensure the repo root is importable when this suite is run from tests/.
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+
 import os
 
 fails = []
@@ -17,7 +21,7 @@ def check(name, cond):
         fails.append(name)
 
 
-HERE = os.path.dirname(os.path.abspath(__file__))
+HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 dev = open(os.path.join(HERE, "network_scanner_devices.py")).read()
 uisrc = open(os.path.join(HERE, "netreg_ui.py")).read()
 

@@ -1,6 +1,10 @@
 """Regression test: bettercap must be found even when it's not on PATH, because
 a macOS app launched from Finder doesn't inherit the Homebrew PATH. Pure/offline.
 Run: python3 test_bettercap_path.py"""
+# Ensure the repo root is importable when this suite is run from tests/.
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+
 import os
 import shutil
 import stat

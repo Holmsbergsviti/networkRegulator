@@ -2,6 +2,10 @@
 scan / probe finishes AFTER the window is closed. Static checks run anywhere;
 the live check runs only if a Tk display is available (e.g. under Xvfb).
 Run: python3 test_device_detail_guard.py"""
+# Ensure the repo root is importable when this suite is run from tests/.
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+
 import os
 
 fails = []
@@ -16,7 +20,7 @@ def check(name, cond):
         fails.append(name)
 
 
-HERE = os.path.dirname(os.path.abspath(__file__))
+HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 src = open(os.path.join(HERE, "device_detail.py")).read()
 
 print("static: worker callbacks go through the guarded _post:")
