@@ -159,6 +159,62 @@ def test_arp_rows_empty():
     assert WindowsBackend._arp_rows_windows("", net) == []
 
 
+# ---- failure diagnosis (why a scan read nothing) -------------------------- #
+def test_classify_no_wireless_interface():
+    # The most common cause on a wired desktop: no Wi-Fi radio.
+    msg = WindowsBackend._classify_netsh_failure(
+        "There is no wireless interface on the system.", 1)
+    assert "no wireless interface" in msg.lower() or "no wi-fi adapter" in msg.lower()
+    assert "ethernet" in msg.lower()  # tells the user why + that wired still works
+
+
+def test_classify_service_off():
+    msg = WindowsBackend._classify_netsh_failure(
+        "The Wireless AutoConfig Service (wlansvc) is not running.", 1)
+    assert "wlansvc" in msg.lower() or "autoconfig" in msg.lower()
+
+
+def test_classify_access_denied():
+    msg = WindowsBackend._classify_netsh_failure("Access is denied.", 1)
+    assert "administrator" in msg.lower()
+
+
+def test_classify_unknown_returns_blank():
+    # Unknown text yields "" so the caller appends the raw exit/snippet instead.
+    assert WindowsBackend._classify_netsh_failure("something weird happened", 5) == ""
+
+
+def test_diagnose_iface_no_adapter():
+    msg = WindowsBackend._diagnose_iface_text(
+        "There is no wireless interface on the system.")
+    assert "no wi-fi adapter" in msg.lower()
+
+
+def test_diagnose_iface_disconnected_is_blank():
+    # A present-but-disconnected adapter still scans once Location is on, so it
+    # must NOT be flagged as the problem (that was the real red herring in the
+    # field: the fix was enabling Location, not connecting Wi-Fi).
+    txt = """
+    There is 1 interface on the system:
+
+        Name                   : Wi-Fi
+        Description            : Qualcomm QCA9377 802.11ac Wireless Adapter
+        State                  : disconnected
+        Radio status           : Hardware On
+                                 Software On
+    """
+    assert WindowsBackend._diagnose_iface_text(txt) == ""
+
+
+def test_diagnose_iface_connected_is_blank():
+    txt = """
+        Name                   : Wi-Fi
+        State                  : connected
+        SSID                   : HomeNet
+    """
+    assert WindowsBackend._diagnose_iface_text(txt) == ""
+
+
 # ---- capabilities contract ----------------------------------------------- #
 def test_capabilities_scan_and_devices_on_deauth_off():
     caps = WindowsBackend().capabilities()

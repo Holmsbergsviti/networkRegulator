@@ -1157,24 +1157,97 @@ class WindowsBackend(Backend):
         # Drop nameless (hidden) networks so no blank row shows.
         return [r for r in rows if r["ESSID"]]
 
+    @staticmethod
+    def _classify_netsh_failure(combined: str, rc: int) -> str:
+        """Turn netsh's own message (stdout+stderr) into a plain-English reason
+        for why a scan produced nothing, so the error names the cause instead of
+        a generic line. netsh prints its errors to STDOUT, often with a non-zero
+        exit, so we look at the combined text. English-label matching; a snippet
+        of the raw output is appended by the caller for any case not covered."""
+        low = combined.lower()
+        if "no wireless interface" in low or "no wireless adapter" in low:
+            return ("No Wi-Fi adapter found on this PC — netsh reports no wireless "
+                    "interface. Scanning for Wi-Fi needs a Wi-Fi radio, so a "
+                    "desktop on Ethernet (or a PC with Wi-Fi disabled) can't scan. "
+                    "Listing devices on the wired network still works.")
+        if "autoconfig" in low or "wlansvc" in low or "is not running" in low:
+            return ("Windows' WLAN AutoConfig service (wlansvc) isn't running — "
+                    "start it (services.msc → WLAN AutoConfig → Start, or "
+                    "'net start wlansvc' in an admin prompt), then scan again.")
+        if "access is denied" in low or "elevation" in low:
+            return "Windows denied the Wi-Fi query (access denied). Try running the app as administrator."
+        return ""
+
     def _scan_once(self) -> tuple[list[dict], str]:
         try:
             r = subprocess.run(
                 ["netsh", "wlan", "show", "networks", "mode=bssid"],
                 capture_output=True, text=True, timeout=25,
             )
+        except FileNotFoundError:
+            return [], "Could not find 'netsh' — is this really Windows?"
         except Exception as e:
             return [], f"Scan error: {e}"
-        out = r.stdout or ""
-        if r.returncode != 0 or not out.strip():
-            err = (r.stderr or "").strip()
-            if "not running" in (out + err).lower() or "wlan" in err.lower():
-                return [], ("Could not read Wi-Fi: the WLAN AutoConfig service "
-                            "may be off, or there is no Wi-Fi adapter.")
-            return [], "Could not read Wi-Fi networks from netsh."
+
+        out = (r.stdout or "").strip()
+        err = (r.stderr or "").strip()
+        combined = f"{out}\n{err}".strip()
+
+        if r.returncode != 0 or not out:
+            reason = self._classify_netsh_failure(combined, r.returncode)
+            if reason:
+                return [], reason
+            # Unknown failure: surface the real evidence (exit code + a snippet of
+            # netsh's own output) so it's diagnosable instead of a generic line.
+            snippet = " ".join(combined.split())[:200]
+            tail = f" (netsh exit {r.returncode}: {snippet})" if snippet else \
+                   f" (netsh exit {r.returncode}, no output)"
+            return [], "Could not read Wi-Fi networks from netsh." + tail
+
         rows = self._parse_netsh_networks(out)
         rows.sort(key=_pwr, reverse=True)
+        if not rows:
+            # netsh ran but listed nothing. On Windows 11 the usual cause is
+            # Location Services being OFF: Windows only returns Wi-Fi scan
+            # results to apps when Location is on (the same gate as macOS), and
+            # it does this even while the adapter is disconnected. The only
+            # harder stop is having no Wi-Fi adapter at all.
+            state = self._wifi_adapter_state()  # non-empty only if there's NO adapter
+            if state:
+                return [], state
+            return [], ("No Wi-Fi networks found. On Windows this is almost always "
+                        "Location Services being off — Windows only hands Wi-Fi "
+                        "networks to apps when Location is on. Turn it on in "
+                        "Settings → Privacy & security → Location (and make sure "
+                        "'Let desktop apps access your location' is on), then scan "
+                        "again. Also check that Wi-Fi itself is enabled.")
         return rows, f"Found {len(rows)} access point(s) via Windows Wi-Fi tools."
+
+    @staticmethod
+    def _wifi_adapter_state() -> str:
+        """Best-effort one-line reason from `netsh wlan show interfaces` when a
+        scan returns nothing: no adapter, or present-but-disconnected. Returns ""
+        if the adapter looks fine (so the caller falls back to a generic note)."""
+        try:
+            r = subprocess.run(["netsh", "wlan", "show", "interfaces"],
+                               capture_output=True, text=True, timeout=10)
+        except Exception:
+            return ""
+        return WindowsBackend._diagnose_iface_text((r.stdout or "") + (r.stderr or ""))
+
+    @staticmethod
+    def _diagnose_iface_text(txt: str) -> str:
+        """Pure half of _wifi_adapter_state: return a reason ONLY when there is
+        no Wi-Fi adapter at all. A present-but-disconnected adapter still scans
+        fine once Location Services is on, so we deliberately do NOT treat
+        'disconnected' as the problem (that would mislead — the real gate is
+        Location). Returns "" whenever an adapter exists. Unit-testable."""
+        low = (txt or "").lower()
+        if "no wireless interface" in low or "there is 0 interface" in low:
+            return ("No Wi-Fi adapter found on this PC. Scanning needs a Wi-Fi "
+                    "radio; a wired-only desktop can't scan, but listing devices "
+                    "on the wired network still works.")
+        return ""
 
     def start_scan(self):
         self._scanning = True
