@@ -83,7 +83,7 @@ use; until then the bundled `netreg_oui.py` table covers common vendors offline.
 
 ```bash
 python3 netreg_integrations.py   # prints what's available + sample lookups
-python3 test_integrations.py     # 32 offline unit checks (OUI table, enrichment, fallbacks, MITM command build)
+python3 tests/test_integrations.py     # 32 offline unit checks (OUI table, enrichment, fallbacks, MITM command build)
 python3 netreg_backend.py        # backend self-check (parsers only, no Wi-Fi needed)
 ```
 

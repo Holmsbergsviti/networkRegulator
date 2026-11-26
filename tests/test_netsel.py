@@ -5,6 +5,10 @@ window must only enable "View devices" for the connected network and must name
 it honestly. These cover the pure decision helpers and the backend contract
 they rely on. Run: python3 test_netsel.py
 """
+# Ensure the repo root is importable when this suite is run from tests/.
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+
 import netreg_netsel as ns
 import netreg_backend as b
 

@@ -8,6 +8,10 @@ Covers:
 
 Run: python3 test_security_hardening.py
 """
+# Ensure the repo root is importable when this suite is run from tests/.
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+
 import netreg_mitm as m
 import netreg_https as h
 import netreg_printcap as p

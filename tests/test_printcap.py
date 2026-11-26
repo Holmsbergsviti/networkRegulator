@@ -3,6 +3,10 @@ Unit tests for netreg_printcap: the pure pcap reader + print-traffic classifier.
 No root, no tcpdump, no real network -- we hand-build pcap bytes and assert the
 verdict. Run: python -m pytest test_printcap.py   (or: python test_printcap.py)
 """
+# Ensure the repo root is importable when this suite is run from tests/.
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+
 import struct
 
 import netreg_printcap as pc

@@ -1,6 +1,10 @@
 """Unit tests for the macOS packaging config. Run: python3 test_packaging.py
 (offline, no Mac needed -- it only validates the metadata/plist/scripts, not a
 real build, which requires macOS)."""
+# Ensure the repo root is importable when this suite is run from tests/.
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+
 import os
 import plistlib
 import subprocess
@@ -21,7 +25,7 @@ def check(name, cond):
         fails.append(name)
 
 
-HERE = os.path.dirname(os.path.abspath(__file__))
+HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 print("appinfo metadata:")
 check("app name is LanLens", appinfo.APP_NAME == "LanLens")

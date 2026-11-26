@@ -1,4 +1,8 @@
 """Unit tests for netreg_snapdiff (pure, offline). Run: python3 test_snapdiff.py"""
+# Ensure the repo root is importable when this suite is run from tests/.
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+
 import netreg_report as rep
 import netreg_snapdiff as sd
 

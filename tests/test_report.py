@@ -1,4 +1,8 @@
 """Unit tests for netreg_report. Run: python3 test_report.py  (offline)."""
+# Ensure the repo root is importable when this suite is run from tests/.
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+
 import datetime
 import os
 import tempfile

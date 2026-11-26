@@ -1,5 +1,9 @@
 """Unit tests for netreg_speedtest. Run: python3 test_speedtest.py  (offline:
 all network I/O is injected with fakes, nothing touches the internet)."""
+# Ensure the repo root is importable when this suite is run from tests/.
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+
 import netreg_speedtest as st
 
 fails = []

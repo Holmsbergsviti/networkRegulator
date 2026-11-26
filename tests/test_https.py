@@ -1,5 +1,9 @@
 """Unit tests for netreg_https. Run: python3 test_https.py  (offline: no proxy,
 no root, no network — only command construction and flow parsing)."""
+# Ensure the repo root is importable when this suite is run from tests/.
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+
 import json
 
 import netreg_https as h

@@ -9,6 +9,10 @@ Both are static/pure, so no real Wi-Fi, admin rights, or Windows is needed.
 
 Run: python3 -m pytest test_windows_backend.py   (or: python3 test_windows_backend.py)
 """
+# Ensure the repo root is importable when this suite is run from tests/.
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+
 import ipaddress
 
 from netreg_backend import WindowsBackend, NETWORK_COLUMNS
