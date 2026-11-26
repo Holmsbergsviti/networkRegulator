@@ -291,6 +291,14 @@ class WifiNetworksUI(tk.Tk):
         "View devices" button and a double-click on the row."""
         sel = self.tree.selection()
         if not sel or sel[0] == self._empty_iid:
+            # No network picked. If the list has no networks to pick (e.g. a
+            # wired-only PC, or Wi-Fi disconnected) and the backend can still
+            # list devices, scan this machine's own network directly instead of
+            # a dead-end prompt — the device (LAN) scan derives its subnet from
+            # this computer's IP, so it doesn't need a Wi-Fi network selected.
+            if not self._current_networks() and self.caps.can_list_devices:
+                self._open_local_devices()
+                return
             messagebox.showinfo(
                 "Pick a network",
                 "Select a network in the list first, then press “View devices”.")
@@ -322,6 +330,21 @@ class WifiNetworksUI(tk.Tk):
         def _open():
             import network_scanner_devices
             return network_scanner_devices.open_devices(self, essid, bssid, ch)
+
+        if ui.open_child_window(_open, "the devices window", parent=self) is None:
+            self.set_status("Couldn't open the devices window — see the error.", "error")
+
+    def _open_local_devices(self):
+        """Open the devices window for this computer's own network, with no
+        Wi-Fi network selected. Used when there are no networks to pick but the
+        backend can still enumerate LAN devices — e.g. an Ethernet-only PC or
+        one whose Wi-Fi is disconnected. The device (LAN) scan finds its subnet
+        from this machine's IP, so blank essid/bssid/ch are fine."""
+        self.set_status("Opening devices on this network…", "work")
+
+        def _open():
+            import network_scanner_devices
+            return network_scanner_devices.open_devices(self, "", "", "")
 
         if ui.open_child_window(_open, "the devices window", parent=self) is None:
             self.set_status("Couldn't open the devices window — see the error.", "error")
