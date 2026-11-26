@@ -1207,14 +1207,20 @@ class WindowsBackend(Backend):
         rows = self._parse_netsh_networks(out)
         rows.sort(key=_pwr, reverse=True)
         if not rows:
-            # netsh ran fine but listed nothing. Usually the Wi-Fi radio is off/
-            # disconnected, or (rarely) a non-English Windows whose labels we
-            # don't match. Check the adapter so the message is specific.
-            state = self._wifi_adapter_state()
+            # netsh ran but listed nothing. On Windows 11 the usual cause is
+            # Location Services being OFF: Windows only returns Wi-Fi scan
+            # results to apps when Location is on (the same gate as macOS), and
+            # it does this even while the adapter is disconnected. The only
+            # harder stop is having no Wi-Fi adapter at all.
+            state = self._wifi_adapter_state()  # non-empty only if there's NO adapter
             if state:
                 return [], state
-            return [], ("No Wi-Fi networks visible. Make sure Wi-Fi is turned on "
-                        "and the adapter is enabled, then scan again.")
+            return [], ("No Wi-Fi networks found. On Windows this is almost always "
+                        "Location Services being off — Windows only hands Wi-Fi "
+                        "networks to apps when Location is on. Turn it on in "
+                        "Settings → Privacy & security → Location (and make sure "
+                        "'Let desktop apps access your location' is on), then scan "
+                        "again. Also check that Wi-Fi itself is enabled.")
         return rows, f"Found {len(rows)} access point(s) via Windows Wi-Fi tools."
 
     @staticmethod
@@ -1231,17 +1237,16 @@ class WindowsBackend(Backend):
 
     @staticmethod
     def _diagnose_iface_text(txt: str) -> str:
-        """Pure half of _wifi_adapter_state: map `netsh wlan show interfaces` text
-        to a reason, or "" if the adapter looks connected/fine. Unit-testable."""
+        """Pure half of _wifi_adapter_state: return a reason ONLY when there is
+        no Wi-Fi adapter at all. A present-but-disconnected adapter still scans
+        fine once Location Services is on, so we deliberately do NOT treat
+        'disconnected' as the problem (that would mislead — the real gate is
+        Location). Returns "" whenever an adapter exists. Unit-testable."""
         low = (txt or "").lower()
         if "no wireless interface" in low or "there is 0 interface" in low:
             return ("No Wi-Fi adapter found on this PC. Scanning needs a Wi-Fi "
                     "radio; a wired-only desktop can't scan, but listing devices "
                     "on the wired network still works.")
-        m = re.search(r"^\s*State\s*:\s*(.+)$", txt or "", re.MULTILINE)
-        if m and m.group(1).strip().lower() != "connected":
-            return (f"Wi-Fi adapter is '{m.group(1).strip()}', not connected. "
-                    "Turn Wi-Fi on / connect to a network, then scan again.")
         return ""
 
     def start_scan(self):

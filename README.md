@@ -100,6 +100,11 @@ one-time Gatekeeper step.
 - **Scanning** uses the built-in `netsh wlan show networks` — nothing to
   install. Unlike macOS, Windows **does** show neighbouring networks' BSSIDs,
   so a mesh/extender shows one row per access point.
+- **Turn on Location Services.** Like macOS, **Windows only returns Wi-Fi scan
+  results to apps when Location is on** — with it off, the scan comes back
+  empty even though Wi-Fi works. Enable it in **Settings → Privacy & security →
+  Location**, and make sure **"Let desktop apps access your location"** is on.
+  (The adapter does *not* need to be connected to a network to scan.)
 - **Device discovery** is a LAN ping-sweep that fills the Windows ARP table,
   then reads it with `arp -a` — same approach as macOS. No admin rights needed.
 - **Disconnecting (deauth)** is **not possible** with standard Windows Wi-Fi

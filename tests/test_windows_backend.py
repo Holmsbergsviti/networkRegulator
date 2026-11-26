@@ -190,16 +190,20 @@ def test_diagnose_iface_no_adapter():
     assert "no wi-fi adapter" in msg.lower()
 
 
-def test_diagnose_iface_disconnected():
+def test_diagnose_iface_disconnected_is_blank():
+    # A present-but-disconnected adapter still scans once Location is on, so it
+    # must NOT be flagged as the problem (that was the real red herring in the
+    # field: the fix was enabling Location, not connecting Wi-Fi).
     txt = """
     There is 1 interface on the system:
 
         Name                   : Wi-Fi
+        Description            : Qualcomm QCA9377 802.11ac Wireless Adapter
         State                  : disconnected
+        Radio status           : Hardware On
+                                 Software On
     """
-    msg = WindowsBackend._diagnose_iface_text(txt)
-    assert "not connected" in msg.lower()
-    assert "disconnected" in msg.lower()
+    assert WindowsBackend._diagnose_iface_text(txt) == ""
 
 
 def test_diagnose_iface_connected_is_blank():
